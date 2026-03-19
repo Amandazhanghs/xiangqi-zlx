@@ -21,6 +21,7 @@ export default function App() {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isWaiting, setIsWaiting] = useState(false);
   const [gameOver, setGameOver] = useState<string | null>(null);
+  const [creatorColor, setCreatorColor] = useState<'red' | 'black'>('red');
 
   // Settings
   const [aiDifficulty, setAiDifficulty] = useState<number>(3);
@@ -290,7 +291,7 @@ export default function App() {
 
   const createRoom = () => {
     const id = Math.floor(100000 + Math.random() * 900000).toString();
-    socket?.emit('createRoom', id);
+    socket?.emit('createRoom', { roomId: id, color: creatorColor });
   };
 
   const joinRoom = (e: React.FormEvent<HTMLFormElement>) => {
@@ -467,6 +468,25 @@ export default function App() {
       {mode === 'online' && !roomId && (
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-stone-200 w-full max-w-md text-center">
           <h2 className="text-2xl font-bold text-stone-800 mb-6">联网对战</h2>
+          
+          <div className="mb-6 text-left">
+            <label className="block text-sm font-medium text-stone-700 mb-2">选择执棋颜色</label>
+            <div className="flex gap-4">
+              <button
+                onClick={() => setCreatorColor('red')}
+                className={`flex-1 py-2 rounded-lg border-2 font-medium transition-colors ${creatorColor === 'red' ? 'border-red-600 bg-red-50 text-red-700' : 'border-stone-200 text-stone-600 hover:bg-stone-50'}`}
+              >
+                执红先走
+              </button>
+              <button
+                onClick={() => setCreatorColor('black')}
+                className={`flex-1 py-2 rounded-lg border-2 font-medium transition-colors ${creatorColor === 'black' ? 'border-stone-800 bg-stone-100 text-stone-900' : 'border-stone-200 text-stone-600 hover:bg-stone-50'}`}
+              >
+                执黑后走
+              </button>
+            </div>
+          </div>
+
           <button
             onClick={createRoom}
             className="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-medium transition-colors mb-6"

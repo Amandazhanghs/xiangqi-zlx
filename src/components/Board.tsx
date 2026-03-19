@@ -145,6 +145,9 @@ export function Board({
         {/* River text */}
         <text x={CELL_SIZE * 2} y={CELL_SIZE * 4.6} fill={lineColor} fontSize={CELL_SIZE * 0.5} fontFamily='"Kaiti", "STKaiti", serif' textAnchor="middle">楚 河</text>
         <text x={CELL_SIZE * 6} y={CELL_SIZE * 4.6} fill={lineColor} fontSize={CELL_SIZE * 0.5} fontFamily='"Kaiti", "STKaiti", serif' textAnchor="middle">汉 界</text>
+
+        {/* Outer border to ensure it's as thick as inner lines (since half of stroke is clipped) */}
+        <rect x={0} y={0} width={BOARD_WIDTH} height={BOARD_HEIGHT} fill="none" stroke={lineColor} strokeWidth="4" />
       </svg>
 
       <div className="relative" style={{ width: BOARD_WIDTH, height: BOARD_HEIGHT }}>

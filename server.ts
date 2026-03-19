@@ -26,12 +26,12 @@ async function startServer() {
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
-    socket.on("createRoom", (roomId) => {
+    socket.on("createRoom", ({ roomId, color }) => {
       if (!rooms.has(roomId)) {
-        rooms.set(roomId, { players: [socket.id], state: null });
+        rooms.set(roomId, { players: [socket.id], state: null, creatorColor: color || 'red' });
         socket.join(roomId);
         socket.emit("roomCreated", roomId);
-        socket.emit("playerColor", "red");
+        socket.emit("playerColor", color || 'red');
       } else {
         socket.emit("error", "Room already exists");
       }
@@ -43,7 +43,8 @@ async function startServer() {
         if (room.players.length < 2) {
           room.players.push(socket.id);
           socket.join(roomId);
-          socket.emit("playerColor", "black");
+          const joinerColor = room.creatorColor === 'red' ? 'black' : 'red';
+          socket.emit("playerColor", joinerColor);
           io.to(roomId).emit("gameStart", { roomId });
         } else {
           socket.emit("error", "Room is full");

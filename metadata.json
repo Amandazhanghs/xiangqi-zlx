@@ -1,0 +1,5 @@
+{
+  "name": "Xiangqi (Chinese Chess)",
+  "description": "Play Chinese Chess against a computer AI or online with a friend.",
+  "requestFramePermissions": []
+}

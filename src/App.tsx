@@ -6,6 +6,7 @@ import { io, Socket } from 'socket.io-client';
 import { Users, Cpu, ArrowLeft, Loader2, Settings, Edit3, RotateCcw, Play, Eraser, Trash2, RefreshCw } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { playMoveSound, playCaptureSound, playCheckSound } from './utils/sounds';
 
 function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
@@ -59,6 +60,7 @@ export default function App() {
         if (bestMove) {
           const newGame = game.clone();
           newGame.makeMove(bestMove);
+          triggerSoundEffects(bestMove, newGame);
           setGame(newGame);
         }
       }, 500);
@@ -69,7 +71,13 @@ export default function App() {
   // Socket setup
   useEffect(() => {
     if (mode === 'online') {
-      const newSocket = io();
+      // Support both same-origin (dev) and cross-origin (deployed) connections
+      // When deployed, the client and server are on the same host, so no URL needed.
+      // window.location.origin ensures it connects to the correct server when deployed.
+      const serverUrl = window.location.origin;
+      const newSocket = io(serverUrl, {
+        transports: ['websocket', 'polling'],
+      });
       setSocket(newSocket);
 
       newSocket.on('roomCreated', (id) => {
@@ -93,6 +101,7 @@ export default function App() {
         setGame(prev => {
           const newGame = prev.clone();
           newGame.makeMove(move);
+          triggerSoundEffects(move, newGame);
           return newGame;
         });
       });
@@ -123,9 +132,28 @@ export default function App() {
     }
   }, [mode]);
 
+  /**
+   * Play sound effects based on what happened after a move:
+   * - If the opponent is in check after the move → 将军
+   * - If a piece was captured → 吃
+   * - Otherwise → move sound
+   */
+  const triggerSoundEffects = (move: Move, gameAfterMove: Xiangqi) => {
+    const opponentColor: PieceColor = gameAfterMove.turn; // turn has already flipped
+    const inCheck = gameAfterMove.isInCheck(opponentColor);
+    if (inCheck) {
+      playCheckSound();
+    } else if (move.captured) {
+      playCaptureSound();
+    } else {
+      playMoveSound();
+    }
+  };
+
   const handleMove = (move: Move) => {
     const newGame = game.clone();
     if (newGame.makeMove(move)) {
+      triggerSoundEffects(move, newGame);
       setGame(newGame);
       if (mode === 'online' && socket) {
         socket.emit('move', { roomId, move });
@@ -227,7 +255,6 @@ export default function App() {
       }
 
       if (editPiece.type === 'k') {
-        // Remove the old king
         for (let i = 0; i < 10; i++) {
           for (let j = 0; j < 9; j++) {
             const p = newGame.getPiece(i, j);

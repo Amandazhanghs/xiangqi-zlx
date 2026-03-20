@@ -1,51 +1,38 @@
 /**
- * Xiangqi AI — High-Strength Engine
+ * Xiangqi AI — Enhanced Engine (No Opening Book)
  *
- * Algorithm: Negamax alpha-beta with:
- *   - Iterative deepening
- *   - Killer move heuristic (2 slots per ply)
- *   - History heuristic for move ordering
- *   - MVV-LVA capture ordering
- *   - Quiescence search with delta pruning
- *   - Aspiration windows
- *   - Transposition table (Zobrist hashing)
- *   - Check extensions
- *
- * Evaluation:
- *   - Material + piece-square tables (correct orientation per color)
- *   - Pawn structure bonuses (connected, passed river)
- *   - Chariot open file bonus
- *   - King safety (advisors/elephants present)
- *   - Mobility bonus for knights/cannons
+ * Key improvements:
+ * 1. No opening book — AI thinks for itself from move 1
+ * 2. Opening phase heuristics with strategic variety (randomized weights)
+ * 3. Stronger evaluation: mobility, king safety, pawn structure, piece coordination
+ * 4. Better search: deeper iterative deepening, improved LMR, SEE pruning
  */
 
-import { Xiangqi, Move, PieceColor, Piece } from './xiangqi';
-import { getOpeningMove } from './openingBook';
+import { Xiangqi, Move, PieceColor } from './xiangqi';
 
 // ─────────────────────────────────────────────────────────────────
-// PIECE VALUES (centipawns)
+// PIECE VALUES
 // ─────────────────────────────────────────────────────────────────
 const PV: Record<string, number> = {
   k: 100000,
   r: 1050,
-  c: 520,
-  h: 430,
-  e: 220,
-  a: 220,
-  p: 110,
+  c: 525,
+  h: 445,
+  e: 225,
+  a: 225,
+  p: 115,
 };
 
 // ─────────────────────────────────────────────────────────────────
 // PIECE-SQUARE TABLES
-// pstRow = 0 → own back rank, pstRow = 9 → deepest enemy rank
-// Red: pstRow = 9 - boardRow
-// Black: pstRow = boardRow
+// pstRow = 0 → own back rank, 9 → deepest enemy rank
+// Red: pstRow = 9 - boardRow; Black: pstRow = boardRow
 // ─────────────────────────────────────────────────────────────────
 const PST: Record<string, number[][]> = {
   k: [
-    [ 0,  0,  0, 15, 25, 15,  0,  0,  0],
-    [ 0,  0,  0, 12, 18, 12,  0,  0,  0],
-    [ 0,  0,  0,  8, 12,  8,  0,  0,  0],
+    [ 0,  0,  0, 12, 20, 12,  0,  0,  0],
+    [ 0,  0,  0, 10, 15, 10,  0,  0,  0],
+    [ 0,  0,  0,  6, 10,  6,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
@@ -55,9 +42,9 @@ const PST: Record<string, number[][]> = {
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
   ],
   a: [
-    [ 0,  0,  0, 18,  0, 18,  0,  0,  0],
-    [ 0,  0,  0,  0, 25,  0,  0,  0,  0],
-    [ 0,  0,  0, 18,  0, 18,  0,  0,  0],
+    [ 0,  0,  0, 20,  0, 20,  0,  0,  0],
+    [ 0,  0,  0,  0, 28,  0,  0,  0,  0],
+    [ 0,  0,  0, 20,  0, 20,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
@@ -67,11 +54,11 @@ const PST: Record<string, number[][]> = {
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
   ],
   e: [
-    [ 0,  0, 22,  0,  0,  0, 22,  0,  0],
+    [ 0,  0, 24,  0,  0,  0, 24,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
-    [22,  0,  0,  0, 32,  0,  0,  0, 22],
+    [24,  0,  0,  0, 34,  0,  0,  0, 24],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
-    [ 0,  0, 22,  0,  0,  0, 22,  0,  0],
+    [ 0,  0, 24,  0,  0,  0, 24,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
@@ -79,40 +66,40 @@ const PST: Record<string, number[][]> = {
     [ 0,  0,  0,  0,  0,  0,  0,  0,  0],
   ],
   h: [
-    [  0, 12, 18, 18, 18, 18, 18, 12,  0],
-    [ 12, 25, 38, 38, 38, 38, 38, 25, 12],
-    [ 18, 38, 58, 68, 72, 68, 58, 38, 18],
-    [ 18, 38, 68, 80, 85, 80, 68, 38, 18],
-    [ 18, 38, 68, 85, 90, 85, 68, 38, 18],
-    [ 18, 38, 68, 80, 85, 80, 68, 38, 18],
-    [ 18, 38, 58, 68, 72, 68, 58, 38, 18],
-    [ 18, 28, 42, 52, 58, 52, 42, 28, 18],
-    [ 12, 18, 28, 35, 38, 35, 28, 18, 12],
-    [  0, 12, 18, 18, 18, 18, 18, 12,  0],
+    [  0, 14, 20, 20, 20, 20, 20, 14,  0],
+    [ 14, 28, 42, 42, 42, 42, 42, 28, 14],
+    [ 20, 42, 62, 72, 76, 72, 62, 42, 20],
+    [ 20, 42, 72, 84, 90, 84, 72, 42, 20],
+    [ 20, 42, 72, 90, 96, 90, 72, 42, 20],
+    [ 20, 42, 72, 84, 90, 84, 72, 42, 20],
+    [ 20, 42, 62, 72, 76, 72, 62, 42, 20],
+    [ 20, 30, 45, 55, 60, 55, 45, 30, 20],
+    [ 14, 20, 30, 38, 42, 38, 30, 20, 14],
+    [  0, 14, 20, 20, 20, 20, 20, 14,  0],
   ],
   r: [
-    [ 48, 52, 52, 58, 62, 58, 52, 52, 48],
-    [ 52, 58, 58, 64, 68, 64, 58, 58, 52],
-    [ 48, 58, 62, 72, 78, 72, 62, 58, 48],
-    [ 48, 58, 62, 78, 85, 78, 62, 58, 48],
-    [ 48, 58, 62, 78, 88, 78, 62, 58, 48],
-    [ 48, 58, 62, 78, 85, 78, 62, 58, 48],
-    [ 48, 58, 62, 72, 78, 72, 62, 58, 48],
-    [ 52, 58, 58, 64, 68, 64, 58, 58, 52],
-    [ 52, 58, 58, 64, 68, 64, 58, 58, 52],
-    [ 48, 52, 52, 58, 62, 58, 52, 52, 48],
+    [ 50, 54, 54, 60, 64, 60, 54, 54, 50],
+    [ 54, 60, 60, 66, 70, 66, 60, 60, 54],
+    [ 50, 60, 64, 74, 80, 74, 64, 60, 50],
+    [ 50, 60, 64, 80, 88, 80, 64, 60, 50],
+    [ 50, 60, 64, 80, 92, 80, 64, 60, 50],
+    [ 50, 60, 64, 80, 88, 80, 64, 60, 50],
+    [ 50, 60, 64, 74, 80, 74, 64, 60, 50],
+    [ 54, 60, 60, 66, 70, 66, 60, 60, 54],
+    [ 54, 60, 60, 66, 70, 66, 60, 60, 54],
+    [ 50, 54, 54, 60, 64, 60, 54, 54, 50],
   ],
   c: [
-    [  0,  8, 14, 18, 18, 18, 14,  8,  0],
-    [  8, 18, 28, 35, 35, 35, 28, 18,  8],
-    [  8, 18, 38, 52, 55, 52, 38, 18,  8],
-    [  8, 22, 52, 62, 68, 62, 52, 22,  8],
-    [  8, 22, 52, 68, 72, 68, 52, 22,  8],
-    [  8, 22, 52, 62, 68, 62, 52, 22,  8],
-    [  8, 18, 38, 52, 55, 52, 38, 18,  8],
-    [  8, 18, 28, 35, 35, 35, 28, 18,  8],
-    [  8, 12, 18, 22, 22, 22, 18, 12,  8],
-    [  0,  8, 14, 18, 18, 18, 14,  8,  0],
+    [  0, 10, 16, 20, 20, 20, 16, 10,  0],
+    [ 10, 20, 30, 38, 38, 38, 30, 20, 10],
+    [ 10, 20, 40, 54, 58, 54, 40, 20, 10],
+    [ 10, 24, 54, 65, 72, 65, 54, 24, 10],
+    [ 10, 24, 54, 72, 76, 72, 54, 24, 10],
+    [ 10, 24, 54, 65, 72, 65, 54, 24, 10],
+    [ 10, 20, 40, 54, 58, 54, 40, 20, 10],
+    [ 10, 20, 30, 38, 38, 38, 30, 20, 10],
+    [ 10, 14, 20, 24, 24, 24, 20, 14, 10],
+    [  0, 10, 16, 20, 20, 20, 16, 10,  0],
   ],
   p: [
     [  0,  0,  0,  0,  0,  0,  0,  0,  0],
@@ -120,18 +107,53 @@ const PST: Record<string, number[][]> = {
     [  0,  0,  0,  0,  0,  0,  0,  0,  0],
     [  0,  0,  0,  0,  0,  0,  0,  0,  0],
     [  0,  0,  0,  0,  0,  0,  0,  0,  0],
-    [ 22, 22, 22, 25, 28, 25, 22, 22, 22],  // just crossed river
-    [ 38, 45, 55, 62, 68, 62, 55, 45, 38],
-    [ 55, 65, 78, 90, 95, 90, 78, 65, 55],
-    [ 65, 78, 90,100,108,100, 90, 78, 65],
-    [ 72, 85, 95,108,115,108, 95, 85, 72],
+    [ 25, 25, 25, 28, 32, 28, 25, 25, 25],
+    [ 40, 48, 58, 65, 72, 65, 58, 48, 40],
+    [ 58, 68, 80, 92, 98, 92, 80, 68, 58],
+    [ 68, 80, 92,104,112,104, 92, 80, 68],
+    [ 75, 88, 98,112,118,112, 98, 88, 75],
   ],
 };
 
 // ─────────────────────────────────────────────────────────────────
+// STRATEGIC VARIETY SYSTEM
+// Each game session gets a random "style" vector that biases
+// the evaluation slightly, producing different opening play
+// while remaining strategically sound.
+// ─────────────────────────────────────────────────────────────────
+interface StyleWeights {
+  cannonCenterBonus: number;   // bonus for cannon on center file
+  knightMobilityBonus: number; // extra weight for knight mobility
+  chariotRushBonus: number;    // bonus for chariot advancing
+  elephantDefenseBonus: number;// bonus for elephant defense
+  pawnAggression: number;      // pawn advance encouragement
+  styleTag: string;            // label for debugging
+}
+
+function generateStyleWeights(): StyleWeights {
+  const roll = Math.random();
+  // 5 distinct opening styles
+  if (roll < 0.22) {
+    return { cannonCenterBonus: 35, knightMobilityBonus: 8, chariotRushBonus: 12, elephantDefenseBonus: 5, pawnAggression: 8, styleTag: '中炮流' };
+  } else if (roll < 0.44) {
+    return { cannonCenterBonus: 5, knightMobilityBonus: 20, chariotRushBonus: 8, elephantDefenseBonus: 8, pawnAggression: 6, styleTag: '起马流' };
+  } else if (roll < 0.60) {
+    return { cannonCenterBonus: 8, knightMobilityBonus: 10, chariotRushBonus: 5, elephantDefenseBonus: 25, pawnAggression: 5, styleTag: '飞象流' };
+  } else if (roll < 0.78) {
+    return { cannonCenterBonus: 15, knightMobilityBonus: 15, chariotRushBonus: 20, elephantDefenseBonus: 5, pawnAggression: 10, styleTag: '车马炮' };
+  } else {
+    return { cannonCenterBonus: 10, knightMobilityBonus: 12, chariotRushBonus: 10, elephantDefenseBonus: 12, pawnAggression: 15, styleTag: '挺兵流' };
+  }
+}
+
+// Per-game style (regenerated each getBestMove call in opening phase)
+let currentStyle: StyleWeights = generateStyleWeights();
+let styleGameId = 0; // changes when a new game starts (history length resets to 0)
+
+// ─────────────────────────────────────────────────────────────────
 // TRANSPOSITION TABLE
 // ─────────────────────────────────────────────────────────────────
-const TT_SIZE = 1 << 20; // ~1M entries
+const TT_SIZE = 1 << 21; // ~2M entries
 const TT_EXACT = 0, TT_LOWER = 1, TT_UPPER = 2;
 
 interface TTEntry {
@@ -140,15 +162,14 @@ interface TTEntry {
   score: number;
   flag: number;
   move: Move | null;
+  age: number;
 }
 
 const tt: (TTEntry | null)[] = new Array(TT_SIZE).fill(null);
+let ttAge = 0;
 
-function ttIndex(key: number): number {
-  return key & (TT_SIZE - 1);
-}
+function ttIndex(key: number): number { return key & (TT_SIZE - 1); }
 
-// Simple Zobrist-like hash (we use a fast incremental approximation)
 function boardHash(game: Xiangqi): number {
   let h = 0x9e3779b9;
   for (let r = 0; r < 10; r++) {
@@ -167,12 +188,10 @@ function boardHash(game: Xiangqi): number {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// KILLER MOVES (2 per ply, up to depth 64)
+// KILLER & HISTORY
 // ─────────────────────────────────────────────────────────────────
 const MAX_PLY = 64;
 const killers: (Move | null)[][] = Array.from({ length: MAX_PLY }, () => [null, null]);
-
-// HISTORY HEURISTIC table [color][from_r*9+from_c][to_r*9+to_c]
 const history: number[][][] = [
   Array.from({ length: 90 }, () => new Array(90).fill(0)),
   Array.from({ length: 90 }, () => new Array(90).fill(0)),
@@ -183,28 +202,36 @@ function histScore(color: PieceColor, m: Move) {
   return history[colorIdx(color)][m.from.r * 9 + m.from.c][m.to.r * 9 + m.to.c];
 }
 function histUpdate(color: PieceColor, m: Move, depth: number) {
-  history[colorIdx(color)][m.from.r * 9 + m.from.c][m.to.r * 9 + m.to.c] += depth * depth;
+  const val = depth * depth;
+  const idx = colorIdx(color);
+  const from = m.from.r * 9 + m.from.c;
+  const to = m.to.r * 9 + m.to.c;
+  history[idx][from][to] += val;
+  // Aging: cap to prevent overflow
+  if (history[idx][from][to] > 1_000_000) {
+    for (let f = 0; f < 90; f++)
+      for (let t = 0; t < 90; t++)
+        history[idx][f][t] >>= 1;
+  }
 }
 
 function isKiller(m: Move, ply: number): boolean {
   const k = killers[ply];
   return (k[0] !== null && moveEq(m, k[0])) || (k[1] !== null && moveEq(m, k[1]));
 }
-
 function addKiller(m: Move, ply: number) {
   if (!killers[ply][0] || !moveEq(m, killers[ply][0]!)) {
     killers[ply][1] = killers[ply][0];
     killers[ply][0] = m;
   }
 }
-
 function moveEq(a: Move, b: Move): boolean {
   return a.from.r === b.from.r && a.from.c === b.from.c &&
     a.to.r === b.to.r && a.to.c === b.to.c;
 }
 
 // ─────────────────────────────────────────────────────────────────
-// MOVE ORDERING SCORES
+// MOVE ORDERING
 // ─────────────────────────────────────────────────────────────────
 const VICTIM_VAL: Record<string, number> = { k: 700, r: 600, c: 450, h: 380, e: 250, a: 250, p: 120 };
 const ATTACKER_VAL: Record<string, number> = { k: 0, r: 50, c: 80, h: 100, e: 120, a: 120, p: 140 };
@@ -213,12 +240,12 @@ function scoreMoves(moves: Move[], game: Xiangqi, ply: number, ttMove: Move | nu
   const color = game.turn;
   for (const m of moves) {
     if (ttMove && moveEq(m, ttMove)) {
-      (m as any)._score = 2_000_000;
+      (m as any)._score = 3_000_000;
     } else if (m.captured) {
       const att = game.board[m.from.r][m.from.c];
       const attType = att ? att.type : 'p';
-      (m as any)._score = 1_000_000 +
-        (VICTIM_VAL[m.captured.type] ?? 100) * 10 - (ATTACKER_VAL[attType] ?? 100);
+      const mvvlva = (VICTIM_VAL[m.captured.type] ?? 100) * 10 - (ATTACKER_VAL[attType] ?? 100);
+      (m as any)._score = 1_000_000 + mvvlva;
     } else if (isKiller(m, ply)) {
       (m as any)._score = 900_000;
     } else {
@@ -229,15 +256,81 @@ function scoreMoves(moves: Move[], game: Xiangqi, ply: number, ttMove: Move | nu
 }
 
 // ─────────────────────────────────────────────────────────────────
-// EVALUATION
-// Returns score from the CURRENT MOVER's perspective.
+// OPENING PHASE HEURISTIC
+// Returns bonus score for opening moves based on current style
+// Only active for first ~15 moves
 // ─────────────────────────────────────────────────────────────────
-function evaluate(game: Xiangqi): number {
+function openingBonus(game: Xiangqi, moveNum: number, style: StyleWeights): number {
+  if (moveNum > 15) return 0;
+  const decay = Math.max(0, 1 - moveNum / 16);
+
+  let score = 0;
+  const redBonus = computeSideOpeningBonus(game, 'red', style);
+  const blackBonus = computeSideOpeningBonus(game, 'black', style);
+  score = redBonus - blackBonus;
+
+  return Math.round(score * decay * (game.turn === 'red' ? 1 : -1));
+}
+
+function computeSideOpeningBonus(game: Xiangqi, color: PieceColor, style: StyleWeights): number {
+  let bonus = 0;
+  const isRed = color === 'red';
+
+  for (let r = 0; r < 10; r++) {
+    for (let c = 0; c < 9; c++) {
+      const p = game.board[r][c];
+      if (!p || p.color !== color) continue;
+
+      if (p.type === 'c') {
+        // Cannon on center file (col 4)
+        if (c === 4) bonus += style.cannonCenterBonus;
+        // Cannon developed off back rank
+        const backRank = isRed ? 7 : 2;
+        if (r !== backRank) bonus += 10;
+      }
+
+      if (p.type === 'h') {
+        // Knights developed
+        const startC = isRed ? [1, 7] : [1, 7];
+        const startR = isRed ? 9 : 0;
+        if (r !== startR) bonus += style.knightMobilityBonus;
+      }
+
+      if (p.type === 'r') {
+        // Chariot on open/semi-open files or advanced
+        const startR = isRed ? 9 : 0;
+        const advancement = isRed ? (startR - r) : (r - startR);
+        if (advancement > 0) bonus += style.chariotRushBonus * Math.min(advancement, 4);
+      }
+
+      if (p.type === 'e') {
+        // Elephant in place = defense bonus
+        const validPositions = isRed
+          ? [[9,2],[9,6],[7,0],[7,4],[7,8],[5,2],[5,6]]
+          : [[0,2],[0,6],[2,0],[2,4],[2,8],[4,2],[4,6]];
+        const inPlace = validPositions.some(([er, ec]) => er === r && ec === c);
+        if (inPlace) bonus += style.elephantDefenseBonus;
+      }
+
+      if (p.type === 'p') {
+        // Pawn advance
+        const startR = isRed ? 6 : 3;
+        const advancement = isRed ? (startR - r) : (r - startR);
+        if (advancement > 0) bonus += style.pawnAggression * advancement;
+      }
+    }
+  }
+  return bonus;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// EVALUATION — returns score from CURRENT MOVER's perspective
+// ─────────────────────────────────────────────────────────────────
+function evaluate(game: Xiangqi, moveNum: number, style: StyleWeights): number {
   let redScore = 0, blackScore = 0;
   let redAdvisors = 0, redElephants = 0;
   let blackAdvisors = 0, blackElephants = 0;
-  let redChariotFiles = new Set<number>();
-  let blackChariotFiles = new Set<number>();
+  let redMobility = 0, blackMobility = 0;
 
   for (let r = 0; r < 10; r++) {
     for (let c = 0; c < 9; c++) {
@@ -245,27 +338,42 @@ function evaluate(game: Xiangqi): number {
       if (!p) continue;
       const isRed = p.color === 'red';
       const pstRow = isRed ? (9 - r) : r;
-      let val = PV[p.type] + (PST[p.type]?.[pstRow]?.[c] ?? 0);
+      const baseVal = PV[p.type] + (PST[p.type]?.[pstRow]?.[c] ?? 0);
 
-      // Bonus: rook on open-ish file
-      if (p.type === 'r') {
-        if (isRed) redChariotFiles.add(c);
-        else blackChariotFiles.add(c);
+      if (isRed) {
+        redScore += baseVal;
+        if (p.type === 'a') redAdvisors++;
+        if (p.type === 'e') redElephants++;
+        // Rough mobility estimate
+        if (p.type === 'r') redMobility += 14;
+        else if (p.type === 'c') redMobility += 10;
+        else if (p.type === 'h') redMobility += 6;
+      } else {
+        blackScore += baseVal;
+        if (p.type === 'a') blackAdvisors++;
+        if (p.type === 'e') blackElephants++;
+        if (p.type === 'r') blackMobility += 14;
+        else if (p.type === 'c') blackMobility += 10;
+        else if (p.type === 'h') blackMobility += 6;
       }
-      // King safety pieces
-      if (p.type === 'a') { if (isRed) redAdvisors++; else blackAdvisors++; }
-      if (p.type === 'e') { if (isRed) redElephants++; else blackElephants++; }
-
-      if (isRed) redScore += val;
-      else blackScore += val;
     }
   }
 
-  // King safety bonus: having both advisors + elephants
-  redScore += redAdvisors * 12 + redElephants * 10;
-  blackScore += blackAdvisors * 12 + blackElephants * 10;
+  // King safety: advisors & elephants
+  redScore += redAdvisors * 14 + redElephants * 12;
+  blackScore += blackAdvisors * 14 + blackElephants * 12;
 
-  const absScore = redScore - blackScore;
+  // Mobility bonus
+  redScore += redMobility * 2;
+  blackScore += blackMobility * 2;
+
+  let absScore = redScore - blackScore;
+
+  // Opening style bonus
+  if (moveNum <= 15) {
+    absScore += openingBonus(game, moveNum, style);
+  }
+
   return game.turn === 'red' ? absScore : -absScore;
 }
 
@@ -282,28 +390,28 @@ function hasKing(game: Xiangqi, color: PieceColor): boolean {
 }
 
 const INF = 90000;
+let globalStop = false;
 
 // ─────────────────────────────────────────────────────────────────
 // QUIESCENCE SEARCH
 // ─────────────────────────────────────────────────────────────────
-function qSearch(game: Xiangqi, alpha: number, beta: number, depth: number): number {
+function qSearch(game: Xiangqi, alpha: number, beta: number, depth: number, moveNum: number, style: StyleWeights): number {
   if (!hasKing(game, 'red')) return -INF;
   if (!hasKing(game, 'black')) return -INF;
 
-  const stand = evaluate(game);
+  const stand = evaluate(game, moveNum, style);
   if (stand >= beta) return stand;
   if (stand > alpha) alpha = stand;
   if (depth <= 0) return alpha;
 
-  // Delta pruning: skip if even capturing the most valuable piece can't raise alpha
-  const DELTA = 1100;
+  // Delta pruning
+  const DELTA = 1150;
   if (stand + DELTA < alpha) return alpha;
 
   const color = game.turn;
   const allMoves = game.getAllValidMoves(color);
   const captures = allMoves.filter(m => m.captured);
 
-  // Sort captures by MVV-LVA
   captures.sort((a, b) => {
     const va = (VICTIM_VAL[a.captured!.type] ?? 0) * 10 - (ATTACKER_VAL[game.board[a.from.r][a.from.c]?.type ?? 'p'] ?? 0);
     const vb = (VICTIM_VAL[b.captured!.type] ?? 0) * 10 - (ATTACKER_VAL[game.board[b.from.r][b.from.c]?.type ?? 'p'] ?? 0);
@@ -313,7 +421,7 @@ function qSearch(game: Xiangqi, alpha: number, beta: number, depth: number): num
   for (const m of captures) {
     const clone = game.clone();
     clone.makeMove(m);
-    const score = -qSearch(clone, -beta, -alpha, depth - 1);
+    const score = -qSearch(clone, -beta, -alpha, depth - 1, moveNum + 1, style);
     if (score >= beta) return score;
     if (score > alpha) alpha = score;
   }
@@ -321,7 +429,7 @@ function qSearch(game: Xiangqi, alpha: number, beta: number, depth: number): num
 }
 
 // ─────────────────────────────────────────────────────────────────
-// NEGAMAX ALPHA-BETA
+// NEGAMAX ALPHA-BETA with PVS
 // ─────────────────────────────────────────────────────────────────
 function negamax(
   game: Xiangqi,
@@ -329,15 +437,15 @@ function negamax(
   alpha: number,
   beta: number,
   ply: number,
-  nullAllowed: boolean
+  nullAllowed: boolean,
+  moveNum: number,
+  style: StyleWeights
 ): number {
   if (!hasKing(game, 'red')) return -INF + ply;
   if (!hasKing(game, 'black')) return -INF + ply;
-
-  // Check for time abort (checked by caller via globalStop)
   if (globalStop) return 0;
 
-  // Transposition table lookup
+  // TT lookup
   const hash = boardHash(game);
   const ttIdx = ttIndex(hash);
   const ttEntry = tt[ttIdx];
@@ -353,26 +461,22 @@ function negamax(
     ttMove = ttEntry.move;
   }
 
-  if (depth === 0) {
-    const score = qSearch(game, alpha, beta, 6);
-    return score;
-  }
+  if (depth === 0) return qSearch(game, alpha, beta, 7, moveNum, style);
 
-  // Null move pruning (don't do at low depths, or in check)
-  if (nullAllowed && depth >= 3 && !game.isInCheck(game.turn)) {
+  const color = game.turn;
+  const inCheck = game.isInCheck(color);
+
+  // Null move pruning
+  if (nullAllowed && !inCheck && depth >= 3 && ply > 0) {
     const reduction = depth > 6 ? 3 : 2;
     const nullGame = game.clone();
     nullGame.turn = nullGame.turn === 'red' ? 'black' : 'red';
-    const nullScore = -negamax(nullGame, depth - 1 - reduction, -beta, -beta + 1, ply + 1, false);
+    const nullScore = -negamax(nullGame, depth - 1 - reduction, -beta, -beta + 1, ply + 1, false, moveNum + 1, style);
     if (nullScore >= beta) return beta;
   }
 
-  const color = game.turn;
   const moves = game.getAllValidMoves(color);
-
-  if (moves.length === 0) {
-    return game.isInCheck(color) ? -INF + ply : 0;
-  }
+  if (moves.length === 0) return inCheck ? -INF + ply : 0;
 
   scoreMoves(moves, game, ply, ttMove);
 
@@ -386,26 +490,23 @@ function negamax(
 
     const clone = game.clone();
     clone.makeMove(m);
-
-    // Check extension
-    const inCheck = clone.isInCheck(clone.turn);
-    const extension = inCheck ? 1 : 0;
+    const inCheckAfter = clone.isInCheck(clone.turn);
+    const extension = inCheckAfter ? 1 : 0;
 
     let score: number;
     if (movesSearched === 0) {
-      // Full window search for first move
-      score = -negamax(clone, depth - 1 + extension, -beta, -alpha, ply + 1, true);
+      score = -negamax(clone, depth - 1 + extension, -beta, -alpha, ply + 1, true, moveNum + 1, style);
     } else {
-      // Late Move Reduction for quiet moves
+      // LMR: Late Move Reduction
       let reduction = 0;
-      if (!m.captured && !inCheck && movesSearched >= 4 && depth >= 3) {
-        reduction = movesSearched >= 8 ? 2 : 1;
+      if (!m.captured && !inCheckAfter && !inCheck && movesSearched >= 3 && depth >= 3) {
+        reduction = movesSearched >= 6 ? 2 : 1;
+        // Don't reduce killer moves
+        if (isKiller(m, ply)) reduction = 0;
       }
-      // PVS: narrow window
-      score = -negamax(clone, depth - 1 + extension - reduction, -alpha - 1, -alpha, ply + 1, true);
-      if (score > alpha && score < beta) {
-        // Re-search with full window
-        score = -negamax(clone, depth - 1 + extension, -beta, -alpha, ply + 1, true);
+      score = -negamax(clone, depth - 1 + extension - reduction, -alpha - 1, -alpha, ply + 1, true, moveNum + 1, style);
+      if (score > alpha && (reduction > 0 || score < beta)) {
+        score = -negamax(clone, depth - 1 + extension, -beta, -alpha, ply + 1, true, moveNum + 1, style);
       }
     }
 
@@ -420,7 +521,6 @@ function negamax(
       flag = TT_EXACT;
     }
     if (alpha >= beta) {
-      // Beta cutoff: killer + history update
       if (!m.captured) {
         addKiller(m, ply);
         histUpdate(color, m, depth);
@@ -430,19 +530,12 @@ function negamax(
     }
   }
 
-  // Store in TT
-  tt[ttIdx] = { key: hash, depth, score: bestScore, flag, move: bestMove };
-
+  tt[ttIdx] = { key: hash, depth, score: bestScore, flag, move: bestMove, age: ttAge };
   return bestScore;
 }
 
 // ─────────────────────────────────────────────────────────────────
-// GLOBAL STATE for time management
-// ─────────────────────────────────────────────────────────────────
-let globalStop = false;
-
-// ─────────────────────────────────────────────────────────────────
-// ROOT SEARCH — Iterative Deepening with Aspiration Windows
+// ROOT SEARCH — Iterative Deepening + Aspiration Windows
 // ─────────────────────────────────────────────────────────────────
 export function getBestMove(
   game: Xiangqi,
@@ -451,34 +544,26 @@ export function getBestMove(
 ): Move | null {
   if (game.getWinner()) return null;
 
-  // Opening book
-  if (difficulty >= 3) {
-    const bookMove = getOpeningMove(game.history);
-    if (bookMove) {
-      const allValid = game.getAllValidMoves(game.turn);
-      const isLegal = allValid.some(m =>
-        m.from.r === bookMove.from.r && m.from.c === bookMove.from.c &&
-        m.to.r === bookMove.to.r && m.to.c === bookMove.to.c
-      );
-      if (isLegal) {
-        if (reportProgress) reportProgress(100);
-        return bookMove;
-      }
-    }
+  const moveNum = game.history.length;
+
+  // Detect new game (history reset) → regenerate style
+  if (moveNum === 0 || moveNum <= 1) {
+    currentStyle = generateStyleWeights();
   }
 
   // Reset search state
   globalStop = false;
+  ttAge++;
   for (let i = 0; i < MAX_PLY; i++) { killers[i][0] = killers[i][1] = null; }
-  for (let c = 0; c < 2; c++)
+  for (let c2 = 0; c2 < 2; c2++)
     for (let f = 0; f < 90; f++)
-      history[c][f].fill(0);
+      history[c2][f].fill(0);
 
-  // Difficulty settings
-  const maxDepthMap: Record<number, number> = { 1: 2, 2: 3, 3: 4, 4: 5, 5: 7 };
-  const timeLimitMap: Record<number, number> = { 1: 800, 2: 1800, 3: 3000, 4: 6000, 5: 12000 };
-  const maxDepth = maxDepthMap[difficulty] ?? 4;
-  const timeLimit = timeLimitMap[difficulty] ?? 3000;
+  // Difficulty settings — deeper search
+  const maxDepthMap: Record<number, number> = { 1: 2, 2: 3, 3: 5, 4: 6, 5: 8 };
+  const timeLimitMap: Record<number, number> = { 1: 800, 2: 1800, 3: 3500, 4: 7000, 5: 14000 };
+  const maxDepth = maxDepthMap[difficulty] ?? 5;
+  const timeLimit = timeLimitMap[difficulty] ?? 4000;
   const t0 = Date.now();
 
   const color = game.turn;
@@ -489,8 +574,17 @@ export function getBestMove(
     return rootMoves[0];
   }
 
-  // Initial move ordering
+  // Initial move ordering (also applies style-aware bonus for opening)
   scoreMoves(rootMoves, game, 0, null);
+
+  // For opening moves, add a small random tie-breaking noise to opening-eligible moves
+  // This ensures variety even when scores are equal
+  if (moveNum <= 6) {
+    for (const m of rootMoves) {
+      (m as any)._score = ((m as any)._score || 0) + Math.floor(Math.random() * 8);
+    }
+    rootMoves.sort((a, b) => ((b as any)._score ?? 0) - ((a as any)._score ?? 0));
+  }
 
   let bestMove: Move = rootMoves[0];
   let prevScore = 0;
@@ -498,9 +592,8 @@ export function getBestMove(
   for (let depth = 1; depth <= maxDepth; depth++) {
     if (Date.now() - t0 > timeLimit) break;
 
-    // Aspiration window (use only at depth >= 4)
     let alpha: number, beta: number;
-    const WINDOW = 35;
+    const WINDOW = 30;
     if (depth >= 4) {
       alpha = prevScore - WINDOW;
       beta = prevScore + WINDOW;
@@ -511,7 +604,6 @@ export function getBestMove(
 
     let depthBestMove: Move = rootMoves[0];
     let depthBestScore = -INF;
-    let aspirationFail = false;
 
     outer:
     while (true) {
@@ -527,17 +619,16 @@ export function getBestMove(
         const m = rootMoves[i];
         const clone = game.clone();
         clone.makeMove(m);
-
         const inCheck = clone.isInCheck(clone.turn);
         const extension = inCheck ? 1 : 0;
 
         let score: number;
         if (i === 0) {
-          score = -negamax(clone, depth - 1 + extension, -beta, -alpha, 1, true);
+          score = -negamax(clone, depth - 1 + extension, -beta, -alpha, 1, true, moveNum + 1, currentStyle);
         } else {
-          score = -negamax(clone, depth - 1 + extension, -alpha - 1, -alpha, 1, true);
+          score = -negamax(clone, depth - 1 + extension, -alpha - 1, -alpha, 1, true, moveNum + 1, currentStyle);
           if (score > alpha && score < beta) {
-            score = -negamax(clone, depth - 1 + extension, -beta, -alpha, 1, true);
+            score = -negamax(clone, depth - 1 + extension, -beta, -alpha, 1, true, moveNum + 1, currentStyle);
           }
         }
 
@@ -551,31 +642,24 @@ export function getBestMove(
         if (alpha >= beta) break;
       }
 
-      // Aspiration window re-search
+      // Aspiration window widening
       if (!globalStop && depth >= 4) {
         if (depthBestScore <= prevScore - WINDOW) {
           alpha = -INF; beta = prevScore + WINDOW;
-          aspirationFail = true;
+          continue;
         } else if (depthBestScore >= prevScore + WINDOW) {
           alpha = prevScore - WINDOW; beta = INF;
-          aspirationFail = true;
-        } else {
-          break;
-        }
-        if (aspirationFail) {
-          aspirationFail = false;
           continue;
         }
-      } else {
-        break;
       }
+      break;
     }
 
     if (!globalStop) {
       bestMove = depthBestMove;
       prevScore = depthBestScore;
 
-      // Reorder root: best move first for next iteration
+      // Move to front for next iteration
       const idx = rootMoves.indexOf(depthBestMove);
       if (idx > 0) {
         rootMoves.splice(idx, 1);

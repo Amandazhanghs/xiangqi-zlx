@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Board, BoardTheme, PieceTheme, PIECE_CHARS } from './components/Board';
-import { Xiangqi, Move, Piece, PieceColor, PieceType } from './game/xiangqi';
-import { getBestMove } from './game/ai';
-import { io, Socket } from 'socket.io-client';
-import { Users, Cpu, ArrowLeft, Loader2, Settings, Edit3, RotateCcw, Play, Eraser, Trash2, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Board, BoardTheme, PieceTheme } from './components/Board';
+import { Xiangqi, Move, Piece } from './game/xiangqi';
+// @ts-ignore
+import AiWorker from './game/aiWorker?worker';
+import { Users, Cpu, ArrowLeft, Settings, Edit3, RotateCcw, Play, Eraser, Trash2, RefreshCw } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { playMoveSound, playCaptureSound, playCheckSound } from './utils/sounds';
@@ -12,26 +12,34 @@ function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
 }
 
-type GameMode = 'menu' | 'ai' | 'online' | 'local' | 'edit';
+type GameMode = 'menu' | 'ai' | 'local' | 'edit';
 
 export default function App() {
   const [mode, setMode] = useState<GameMode>('menu');
   const [game, setGame] = useState(new Xiangqi());
   const [playerColor, setPlayerColor] = useState<'red' | 'black' | 'both'>('red');
-  const [roomId, setRoomId] = useState('');
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [isWaiting, setIsWaiting] = useState(false);
   const [gameOver, setGameOver] = useState<string | null>(null);
-  const [creatorColor, setCreatorColor] = useState<'red' | 'black'>('red');
 
   // Settings
   const [aiDifficulty, setAiDifficulty] = useState<number>(3);
-  const [boardTheme, setBoardTheme] = useState<BoardTheme>('classic');
-  const [pieceTheme, setPieceTheme] = useState<PieceTheme>('classic');
+  const [boardTheme, setBoardTheme] = useState<BoardTheme>('wood');
+  const [pieceTheme, setPieceTheme] = useState<PieceTheme>('wood');
   const [showSettings, setShowSettings] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [aiProgress, setAiProgress] = useState(0);
+
+  const workerRef = useRef<Worker | null>(null);
+
+  useEffect(() => {
+    workerRef.current = new AiWorker();
+    return () => {
+      workerRef.current?.terminate();
+    };
+  }, []);
 
   // Edit Mode
   const [editPiece, setEditPiece] = useState<Piece | 'eraser' | null>(null);
+  const [editHistory, setEditHistory] = useState<Xiangqi[]>([]);
 
   // Cheat Mode
   const [isCheatModeUnlocked, setIsCheatModeUnlocked] = useState(false);
@@ -54,109 +62,71 @@ export default function App() {
 
   // AI Move effect
   useEffect(() => {
+    let isCancelled = false;
+
     if (mode === 'ai' && game.turn !== playerColor && !game.isGameOver()) {
-      const timer = setTimeout(() => {
-        const bestMove = getBestMove(game, aiDifficulty);
-        if (bestMove) {
-          const newGame = game.clone();
-          newGame.makeMove(bestMove);
-          triggerSoundEffects(bestMove, newGame);
-          setGame(newGame);
-        }
-      }, 500);
-      return () => clearTimeout(timer);
+      setIsThinking(true);
+      setAiProgress(0);
+      
+      if (workerRef.current) {
+        workerRef.current.onmessage = (e) => {
+          if (isCancelled) return;
+          
+          if (e.data.type === 'progress') {
+            setAiProgress(e.data.progress);
+          } else if (e.data.type === 'done') {
+            const bestMove = e.data.move;
+            if (bestMove) {
+              const newGame = game.clone();
+              const isCapture = newGame.getPiece(bestMove.to.r, bestMove.to.c) !== null;
+              newGame.makeMove(bestMove);
+              setGame(newGame);
+
+              if (isCapture) {
+                playCaptureSound();
+              } else {
+                playMoveSound();
+              }
+              if (newGame.isInCheck(newGame.turn)) {
+                playCheckSound();
+              }
+            }
+            setIsThinking(false);
+            setAiProgress(0);
+          }
+        };
+
+        workerRef.current.postMessage({
+          board: game.board,
+          turn: game.turn,
+          history: game.history,
+          capturedPieces: game.capturedPieces,
+          difficulty: aiDifficulty
+        });
+      }
     }
+
+    return () => {
+      isCancelled = true;
+    };
   }, [game, mode, playerColor, aiDifficulty]);
 
-  // Socket setup
-  useEffect(() => {
-    if (mode === 'online') {
-      // Support both same-origin (dev) and cross-origin (deployed) connections
-      // When deployed, the client and server are on the same host, so no URL needed.
-      // window.location.origin ensures it connects to the correct server when deployed.
-      const serverUrl = window.location.origin;
-      const newSocket = io(serverUrl, {
-        transports: ['websocket', 'polling'],
-      });
-      setSocket(newSocket);
-
-      newSocket.on('roomCreated', (id) => {
-        setRoomId(id);
-        setIsWaiting(true);
-      });
-
-      newSocket.on('playerColor', (color) => {
-        setPlayerColor(color);
-      });
-
-      newSocket.on('gameStart', () => {
-        setIsWaiting(false);
-        setGame(new Xiangqi());
-        setGameOver(null);
-        setIsCheatModeUnlocked(false);
-        setActiveCheat('none');
-      });
-
-      newSocket.on('opponentMove', (move: Move) => {
-        setGame(prev => {
-          const newGame = prev.clone();
-          newGame.makeMove(move);
-          triggerSoundEffects(move, newGame);
-          return newGame;
-        });
-      });
-
-      newSocket.on('opponentCheatAction', ({ action, payload }) => {
-        setGame(prev => {
-          const newGame = prev.clone();
-          if (action === 'armor') newGame.applyCheatArmor(payload.r, payload.c);
-          if (action === 'drift') newGame.applyCheatDrift(payload.r, payload.c);
-          if (action === 'revive') newGame.applyCheatRevive(payload.r, payload.c, payload.piece);
-          if (action === 'betray') newGame.applyCheatBetray(payload.r, payload.c);
-          return newGame;
-        });
-      });
-
-      newSocket.on('playerDisconnected', () => {
-        setGameOver('对手已断开连接');
-      });
-
-      newSocket.on('error', (msg) => {
-        alert(msg);
-        setMode('menu');
-      });
-
-      return () => {
-        newSocket.disconnect();
-      };
-    }
-  }, [mode]);
-
-  /**
-   * Play sound effects based on what happened after a move:
-   * - If the opponent is in check after the move → 将军
-   * - If a piece was captured → 吃
-   * - Otherwise → move sound
-   */
-  const triggerSoundEffects = (move: Move, gameAfterMove: Xiangqi) => {
-    const opponentColor: PieceColor = gameAfterMove.turn; // turn has already flipped
-    const inCheck = gameAfterMove.isInCheck(opponentColor);
-    if (inCheck) {
-      playCheckSound();
-    } else if (move.captured) {
-      playCaptureSound();
-    } else {
-      playMoveSound();
-    }
-  };
-
   const handleMove = (move: Move) => {
+    if (isThinking) return;
+    
     const newGame = game.clone();
+    const isCapture = newGame.getPiece(move.to.r, move.to.c) !== null;
+    
     if (newGame.makeMove(move)) {
-      triggerSoundEffects(move, newGame);
       setGame(newGame);
-      if (mode === 'online' && socket) {
-        socket.emit('move', { roomId, move });
+      
+      if (isCapture) {
+        playCaptureSound();
+      } else {
+        playMoveSound();
+      }
+      if (newGame.isInCheck(newGame.turn)) {
+        playCheckSound();
       }
     }
   };
@@ -184,13 +154,6 @@ export default function App() {
     if (valid) {
       setGame(newGame);
       setActiveCheat('none');
-      if (mode === 'online' && socket) {
-        socket.emit('cheatAction', {
-          roomId,
-          action: activeCheat,
-          payload: { r, c, piece: activeCheat === 'revive' ? revivePiece : undefined }
-        });
-      }
     }
   };
 
@@ -254,7 +217,31 @@ export default function App() {
         return;
       }
 
+      // Check piece count limits
+      if (editPiece.type !== 'k') {
+        let count = 0;
+        for (let i = 0; i < 10; i++) {
+          for (let j = 0; j < 9; j++) {
+            const p = newGame.getPiece(i, j);
+            if (p && p.type === editPiece.type && p.color === editPiece.color) {
+              count++;
+            }
+          }
+        }
+
+        if (!existingPiece || existingPiece.type !== editPiece.type || existingPiece.color !== editPiece.color) {
+          let maxCount = 2;
+          if (editPiece.type === 'p') maxCount = 5;
+
+          if (count >= maxCount) {
+            alert(`不能添加超过正常数量的棋子！`);
+            return;
+          }
+        }
+      }
+
       if (editPiece.type === 'k') {
+        // Remove the old king
         for (let i = 0; i < 10; i++) {
           for (let j = 0; j < 9; j++) {
             const p = newGame.getPiece(i, j);
@@ -265,299 +252,343 @@ export default function App() {
         }
       }
 
-      newGame.setPiece(r, c, { ...editPiece });
+      newGame.setPiece(r, c, { ...editPiece, id: `${editPiece.type}_${editPiece.color}_${Date.now()}_${Math.random()}` });
     }
+    setEditHistory(prev => [...prev, game]);
     setGame(newGame);
   };
 
   const handleUndo = () => {
-    if (mode === 'ai') {
+    if (mode === 'edit') {
+      if (editHistory.length > 0) {
+        const previousState = editHistory[editHistory.length - 1];
+        setGame(previousState);
+        setEditHistory(prev => prev.slice(0, -1));
+      }
+    } else {
       const newGame = game.clone();
-      newGame.undo();
-      newGame.undo();
+      if (mode === 'ai') {
+        newGame.undo();
+        newGame.undo();
+      } else if (mode === 'local') {
+        newGame.undo();
+      }
       setGame(newGame);
-      setGameOver(null);
-    } else if (mode === 'local' || mode === 'edit') {
-      const newGame = game.clone();
-      newGame.undo();
-      setGame(newGame);
-      setGameOver(null);
     }
   };
 
-  const startAI = (color: 'red' | 'black') => {
-    setPlayerColor(color);
-    setGame(new Xiangqi());
-    setGameOver(null);
-    setIsCheatModeUnlocked(false);
-    setActiveCheat('none');
-    setMode('ai');
-  };
-
   const startLocal = () => {
+    setMode('local');
     setPlayerColor('both');
     setGame(new Xiangqi());
     setGameOver(null);
     setIsCheatModeUnlocked(false);
     setActiveCheat('none');
-    setMode('local');
+  };
+
+  const startAI = (color: 'red' | 'black') => {
+    setMode('ai');
+    setPlayerColor(color);
+    setGame(new Xiangqi());
+    setGameOver(null);
+    setIsCheatModeUnlocked(false);
+    setActiveCheat('none');
   };
 
   const startEdit = () => {
+    setMode('edit');
     setPlayerColor('both');
     const newGame = new Xiangqi();
     newGame.clearBoard();
     newGame.setPiece(9, 4, { id: 'k_red', type: 'k', color: 'red' });
     newGame.setPiece(0, 4, { id: 'k_black', type: 'k', color: 'black' });
     setGame(newGame);
+    setEditHistory([]);
+    setEditPiece(null);
     setGameOver(null);
     setIsCheatModeUnlocked(false);
     setActiveCheat('none');
-    setMode('edit');
   };
 
-  const createRoom = () => {
-    const id = Math.floor(100000 + Math.random() * 900000).toString();
-    socket?.emit('createRoom', { roomId: id, color: creatorColor });
-  };
-
-  const joinRoom = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleCheatUnlock = (e: React.FormEvent) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const id = formData.get('roomId') as string;
-    if (id) {
-      setRoomId(id);
-      socket?.emit('joinRoom', id);
+    if (cheatPassword === '244039') {
+      setIsCheatModeUnlocked(true);
+      setCheatPassword('');
+    } else {
+      alert('密码错误！');
     }
   };
 
-  if (mode === 'menu') {
-    return (
-      <div className="min-h-screen bg-stone-100 flex flex-col items-center justify-center p-4">
-        <h1 className="text-5xl font-bold text-amber-900 mb-12" style={{ fontFamily: '"Kaiti", "STKaiti", serif' }}>
-          中国象棋
-        </h1>
-        <div className="flex flex-col gap-6 w-full max-w-sm">
-          <div className="bg-white p-6 rounded-2xl shadow-xl border border-stone-200">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold flex items-center gap-2 text-stone-800">
-                <Cpu className="w-5 h-5" /> 人机对战
-              </h2>
-              <select 
-                value={aiDifficulty} 
-                onChange={e => setAiDifficulty(Number(e.target.value))}
-                className="text-sm border border-stone-300 rounded px-2 py-1 bg-stone-50"
-              >
-                <option value={2}>简单 (深度 2)</option>
-                <option value={3}>普通 (深度 3)</option>
-                <option value={4}>困难 (深度 4)</option>
-              </select>
-            </div>
-            <div className="flex gap-4">
-              <button
-                onClick={() => startAI('red')}
-                className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-medium transition-colors"
-              >
-                执红先手
-              </button>
-              <button
-                onClick={() => startAI('black')}
-                className="flex-1 py-3 bg-stone-800 hover:bg-stone-900 text-white rounded-xl font-medium transition-colors"
-              >
-                执黑后手
-              </button>
-            </div>
+  return (
+    <div className="min-h-screen bg-[#f5f5f0] font-['Cormorant_Garamond',_serif] text-[#2c2c2c] flex flex-col items-center justify-center p-4">
+      {mode === 'menu' && (
+        <div className="w-full max-w-md bg-white p-10 rounded-[32px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#e5e5df]">
+          <div className="text-center mb-10">
+            <h1 className="text-5xl font-bold mb-3 tracking-tight text-[#1a1a1a]">中国象棋</h1>
+            <p className="text-[#666] italic text-lg">传承千年的智慧博弈</p>
           </div>
 
-          <div className="bg-white p-6 rounded-2xl shadow-xl border border-stone-200">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-stone-800">
-              <Users className="w-5 h-5" /> 双人对战
-            </h2>
-            <div className="flex gap-4 mb-4">
+          <div className="space-y-8">
+            <div className="space-y-4">
+              <h2 className="text-xl font-semibold flex items-center gap-2 text-[#4a4a4a] border-b border-[#e5e5df] pb-2">
+                <Cpu className="w-5 h-5 text-[#5A5A40]" /> 人机对战
+              </h2>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => startAI('red')}
+                  className="flex-1 py-3 bg-[#8B0000] hover:bg-[#6B0000] text-white rounded-full font-medium transition-all shadow-sm hover:shadow-md"
+                >
+                  执红先手
+                </button>
+                <button
+                  onClick={() => startAI('black')}
+                  className="flex-1 py-3 bg-[#2c2c2c] hover:bg-[#1a1a1a] text-white rounded-full font-medium transition-all shadow-sm hover:shadow-md"
+                >
+                  执黑后手
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h2 className="text-xl font-semibold flex items-center gap-2 text-[#4a4a4a] border-b border-[#e5e5df] pb-2">
+                <Users className="w-5 h-5 text-[#5A5A40]" /> 双人对战
+              </h2>
               <button
                 onClick={startLocal}
-                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium transition-colors"
+                className="w-full py-3 bg-[#5A5A40] hover:bg-[#4A4A30] text-white rounded-full font-medium transition-all shadow-sm hover:shadow-md"
               >
                 本地双人
               </button>
+            </div>
+
+            <div className="flex gap-3 pt-4">
               <button
-                onClick={() => setMode('online')}
-                className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-medium transition-colors"
+                onClick={startEdit}
+                className="flex-1 py-3 bg-white border border-[#d5d5cf] hover:bg-[#f5f5f0] text-[#4a4a4a] rounded-full font-medium transition-colors flex items-center justify-center gap-2"
               >
-                联网对战
+                <Edit3 className="w-4 h-4" /> 打谱模式
+              </button>
+              <button
+                onClick={() => setShowSettings(true)}
+                className="flex-1 py-3 bg-white border border-[#d5d5cf] hover:bg-[#f5f5f0] text-[#4a4a4a] rounded-full font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                <Settings className="w-4 h-4" /> 设置
               </button>
             </div>
           </div>
-
-          <div className="flex gap-4">
-            <button
-              onClick={startEdit}
-              className="flex-1 py-3 bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 shadow-sm"
-            >
-              <Edit3 className="w-5 h-5" /> 打谱 / 编辑
-            </button>
-            <button
-              onClick={() => setShowSettings(true)}
-              className="flex-1 py-3 bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 shadow-sm"
-            >
-              <Settings className="w-5 h-5" /> 设置
-            </button>
-          </div>
-        </div>
-
-        {showSettings && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-sm">
-              <h2 className="text-2xl font-bold mb-6 text-stone-800">设置</h2>
-              
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-stone-700 mb-2">棋盘样式</label>
-                <select 
-                  value={boardTheme} 
-                  onChange={e => setBoardTheme(e.target.value as BoardTheme)}
-                  className="w-full border border-stone-300 rounded-lg px-3 py-2"
-                >
-                  <option value="classic">经典</option>
-                  <option value="wood">木纹</option>
-                  <option value="paper">纸质</option>
-                </select>
-              </div>
-
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-stone-700 mb-2">棋子样式</label>
-                <select 
-                  value={pieceTheme} 
-                  onChange={e => setPieceTheme(e.target.value as PieceTheme)}
-                  className="w-full border border-stone-300 rounded-lg px-3 py-2"
-                >
-                  <option value="classic">经典</option>
-                  <option value="wood">木质</option>
-                  <option value="flat">扁平</option>
-                </select>
-              </div>
-
-              <button
-                onClick={() => setShowSettings(false)}
-                className="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-medium transition-colors"
-              >
-                确定
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-stone-100 flex flex-col items-center py-8 px-4">
-      <div className="w-full max-w-4xl flex flex-wrap items-center justify-between gap-4 mb-8">
-        <button
-          onClick={() => {
-            setMode('menu');
-            setRoomId('');
-            if (socket) socket.disconnect();
-          }}
-          className="flex items-center gap-2 text-stone-600 hover:text-stone-900 transition-colors bg-white px-4 py-2 rounded-lg shadow-sm"
-        >
-          <ArrowLeft className="w-4 h-4" /> 返回主菜单
-        </button>
-        
-        <div className="text-lg font-medium text-stone-800 bg-white px-6 py-2 rounded-lg shadow-sm flex items-center gap-4">
-          {mode === 'online' ? (
-            isWaiting ? (
-              <span className="flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> 等待对手加入... 房间号: <strong className="text-amber-600">{roomId}</strong>
-              </span>
-            ) : (
-              <span>联网对战 - 房间号: {roomId}</span>
-            )
-          ) : mode === 'local' ? (
-            <span>本地双人</span>
-          ) : mode === 'edit' ? (
-            <span>打谱 / 编辑局面</span>
-          ) : (
-            <span>人机对战 (深度 {aiDifficulty})</span>
-          )}
-
-          {mode !== 'online' && mode !== 'edit' && (
-            <button
-              onClick={handleUndo}
-              disabled={game.history.length === 0}
-              className="ml-4 flex items-center gap-1 text-sm text-stone-600 hover:text-stone-900 disabled:opacity-50"
-            >
-              <RotateCcw className="w-4 h-4" /> 悔棋
-            </button>
-          )}
-        </div>
-      </div>
-
-      {mode === 'online' && !roomId && (
-        <div className="bg-white p-8 rounded-2xl shadow-xl border border-stone-200 w-full max-w-md text-center">
-          <h2 className="text-2xl font-bold text-stone-800 mb-6">联网对战</h2>
-          
-          <div className="mb-6 text-left">
-            <label className="block text-sm font-medium text-stone-700 mb-2">选择执棋颜色</label>
-            <div className="flex gap-4">
-              <button
-                onClick={() => setCreatorColor('red')}
-                className={`flex-1 py-2 rounded-lg border-2 font-medium transition-colors ${creatorColor === 'red' ? 'border-red-600 bg-red-50 text-red-700' : 'border-stone-200 text-stone-600 hover:bg-stone-50'}`}
-              >
-                执红先走
-              </button>
-              <button
-                onClick={() => setCreatorColor('black')}
-                className={`flex-1 py-2 rounded-lg border-2 font-medium transition-colors ${creatorColor === 'black' ? 'border-stone-800 bg-stone-100 text-stone-900' : 'border-stone-200 text-stone-600 hover:bg-stone-50'}`}
-              >
-                执黑后走
-              </button>
-            </div>
-          </div>
-
-          <button
-            onClick={createRoom}
-            className="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-medium transition-colors mb-6"
-          >
-            创建新房间
-          </button>
-          <div className="relative mb-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-stone-200"></div>
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-white text-stone-500">或加入已有房间</span>
-            </div>
-          </div>
-          <form onSubmit={joinRoom} className="flex gap-2">
-            <input
-              name="roomId"
-              placeholder="输入6位数字房间号"
-              className="flex-1 px-4 py-3 rounded-xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-amber-500"
-              maxLength={6}
-              pattern="\d{6}"
-              required
-            />
-            <button
-              type="submit"
-              className="px-6 py-3 bg-stone-800 hover:bg-stone-900 text-white rounded-xl font-medium transition-colors"
-            >
-              加入
-            </button>
-          </form>
         </div>
       )}
 
-      {(!isWaiting && (mode === 'ai' || mode === 'local' || mode === 'edit' || (mode === 'online' && roomId))) && (
-        <div className="flex flex-col lg:flex-row items-start gap-8">
-          <div className="flex flex-col items-center gap-4">
-            {mode !== 'edit' && (
-              <div className="flex items-center justify-between w-full max-w-md px-4 py-2 bg-white rounded-lg shadow-sm">
-                <div className="flex items-center gap-2">
-                  <div className={`w-3 h-3 rounded-full ${game.turn === (playerColor === 'red' ? 'black' : 'red') ? (playerColor === 'red' ? 'bg-black' : 'bg-red-500') : 'bg-stone-300'}`} />
-                  <span className="font-medium">{playerColor === 'red' ? '黑方' : '红方'}</span>
+      {mode !== 'menu' && (
+        <div className="flex flex-col xl:flex-row gap-8 items-start justify-center w-full max-w-6xl">
+          {/* Left Panel - Controls */}
+          <div className="w-full xl:w-80 flex flex-col gap-4">
+            <button
+              onClick={() => setMode('menu')}
+              className="w-full flex items-center justify-center gap-2 py-3 bg-white hover:bg-[#f5f5f0] text-[#4a4a4a] rounded-full font-medium transition-colors border border-[#d5d5cf] shadow-sm"
+            >
+              <ArrowLeft className="w-4 h-4" /> 返回主菜单
+            </button>
+
+            {mode === 'edit' && (
+              <div className="bg-white p-6 rounded-[24px] shadow-sm border border-[#e5e5df] flex flex-col gap-4">
+                <h3 className="font-semibold text-lg border-b border-[#e5e5df] pb-2">编辑工具</h3>
+                
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => {
+                      const newGame = new Xiangqi();
+                      setEditHistory(prev => [...prev, game]);
+                      setGame(newGame);
+                    }}
+                    className="flex items-center justify-center gap-2 py-2 bg-[#f5f5f0] hover:bg-[#e5e5df] text-[#4a4a4a] rounded-xl font-medium transition-colors"
+                  >
+                    <RefreshCw className="w-4 h-4" /> 初始局面
+                  </button>
+                  <button
+                    onClick={() => {
+                      const newGame = game.clone();
+                      setEditHistory(prev => [...prev, game]);
+                      newGame.clearBoard();
+                      newGame.setPiece(9, 4, { id: 'k_red', type: 'k', color: 'red' });
+                      newGame.setPiece(0, 4, { id: 'k_black', type: 'k', color: 'black' });
+                      setGame(newGame);
+                    }}
+                    className="flex items-center justify-center gap-2 py-2 bg-[#f5f5f0] hover:bg-[#e5e5df] text-[#4a4a4a] rounded-xl font-medium transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" /> 清空棋盘
+                  </button>
                 </div>
-                <div className="text-sm text-stone-500">
-                  {mode === 'ai' ? '(电脑)' : mode === 'local' ? '(玩家 2)' : '(对手)'}
+
+                <div className="space-y-3">
+                  <div className="text-sm font-medium text-[#666]">红方棋子</div>
+                  <div className="flex flex-wrap gap-2">
+                    {(['k', 'a', 'e', 'h', 'r', 'c', 'p'] as const).map(type => (
+                      <button
+                        key={`red-${type}`}
+                        onClick={() => setEditPiece({ id: `${type}_red_${Date.now()}`, type, color: 'red' })}
+                        className={cn(
+                          "w-10 h-10 rounded-full border-2 flex items-center justify-center text-lg font-bold transition-all",
+                          editPiece !== 'eraser' && editPiece?.type === type && editPiece?.color === 'red'
+                            ? "border-[#8B0000] bg-[#fff0f0] text-[#8B0000] shadow-md scale-110"
+                            : "border-[#d5d5cf] bg-white text-[#8B0000] hover:bg-[#f5f5f0]"
+                        )}
+                      >
+                        {type === 'k' ? '帅' : type === 'a' ? '仕' : type === 'e' ? '相' : type === 'h' ? '马' : type === 'r' ? '车' : type === 'c' ? '炮' : '兵'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="text-sm font-medium text-[#666]">黑方棋子</div>
+                  <div className="flex flex-wrap gap-2">
+                    {(['k', 'a', 'e', 'h', 'r', 'c', 'p'] as const).map(type => (
+                      <button
+                        key={`black-${type}`}
+                        onClick={() => setEditPiece({ id: `${type}_black_${Date.now()}`, type, color: 'black' })}
+                        className={cn(
+                          "w-10 h-10 rounded-full border-2 flex items-center justify-center text-lg font-bold transition-all",
+                          editPiece !== 'eraser' && editPiece?.type === type && editPiece?.color === 'black'
+                            ? "border-[#2c2c2c] bg-[#f0f0f0] text-[#2c2c2c] shadow-md scale-110"
+                            : "border-[#d5d5cf] bg-white text-[#2c2c2c] hover:bg-[#f5f5f0]"
+                        )}
+                      >
+                        {type === 'k' ? '将' : type === 'a' ? '士' : type === 'e' ? '象' : type === 'h' ? '马' : type === 'r' ? '车' : type === 'c' ? '炮' : '卒'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setEditPiece('eraser')}
+                  className={cn(
+                    "w-full flex items-center justify-center gap-2 py-2 rounded-xl font-medium transition-all border-2",
+                    editPiece === 'eraser'
+                      ? "border-[#5A5A40] bg-[#f0f0e8] text-[#5A5A40] shadow-md"
+                      : "border-[#d5d5cf] bg-white text-[#666] hover:bg-[#f5f5f0]"
+                  )}
+                >
+                  <Eraser className="w-4 h-4" /> 橡皮擦
+                </button>
+              </div>
+            )}
+
+            <div className="bg-white p-6 rounded-[24px] shadow-sm border border-[#e5e5df] flex flex-col gap-4">
+              <div className="flex justify-between items-center border-b border-[#e5e5df] pb-2">
+                <span className="font-semibold text-lg">当前回合</span>
+                <div className="flex items-center gap-2">
+                  <div className={cn("w-3 h-3 rounded-full", game.turn === 'red' ? 'bg-[#8B0000]' : 'bg-[#2c2c2c]')} />
+                  <span className="font-medium">{game.turn === 'red' ? '红方' : '黑方'}</span>
+                </div>
+              </div>
+
+              {/* AI Thinking Progress */}
+              {isThinking && (
+                <div className="flex flex-col gap-2 py-2 border-b border-[#e5e5df]">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium text-[#1a1a1a]">电脑思考中...</span>
+                    <span className="text-sm font-bold text-[#5A5A40]">{aiProgress}%</span>
+                  </div>
+                  <div className="w-full bg-[#e5e5df] rounded-full h-2 overflow-hidden">
+                    <div 
+                      className="bg-[#5A5A40] h-2 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${aiProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              
+              <button
+                onClick={handleUndo}
+                disabled={(mode === 'edit' ? editHistory.length === 0 : game.history.length === 0) || isThinking}
+                className="w-full flex items-center justify-center gap-2 py-3 bg-[#f5f5f0] hover:bg-[#e5e5df] disabled:opacity-50 disabled:cursor-not-allowed text-[#4a4a4a] rounded-full font-medium transition-colors"
+              >
+                <RotateCcw className="w-4 h-4" /> 悔棋
+              </button>
+            </div>
+
+            {/* Cheat Mode Panel */}
+            {mode !== 'edit' && (
+              <div className="bg-white p-6 rounded-[24px] shadow-sm border border-[#e5e5df] flex flex-col gap-4">
+                <h3 className="font-semibold text-lg border-b border-[#e5e5df] pb-2">秘籍模式</h3>
+                {!isCheatModeUnlocked ? (
+                  <form onSubmit={handleCheatUnlock} className="flex gap-2">
+                    <input
+                      type="password"
+                      value={cheatPassword}
+                      onChange={(e) => setCheatPassword(e.target.value)}
+                      placeholder="输入密码"
+                      className="flex-1 border border-[#d5d5cf] rounded-full px-4 py-2 text-sm focus:outline-none focus:border-[#5A5A40]"
+                    />
+                    <button type="submit" className="px-4 py-2 bg-[#5A5A40] text-white rounded-full text-sm font-medium hover:bg-[#4A4A30]">
+                      解锁
+                    </button>
+                  </form>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="text-sm text-[#666] italic">点击下方技能，然后在棋盘上选择目标。</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setActiveCheat(activeCheat === 'armor' ? 'none' : 'armor')}
+                        className={cn("py-2 px-2 text-sm rounded-xl border transition-all", activeCheat === 'armor' ? "bg-[#5A5A40] text-white border-[#5A5A40]" : "bg-white text-[#4a4a4a] border-[#d5d5cf] hover:bg-[#f5f5f0]")}
+                      >
+                        铁甲兵 (己方兵)
+                      </button>
+                      <button
+                        onClick={() => setActiveCheat(activeCheat === 'drift' ? 'none' : 'drift')}
+                        className={cn("py-2 px-2 text-sm rounded-xl border transition-all", activeCheat === 'drift' ? "bg-[#5A5A40] text-white border-[#5A5A40]" : "bg-white text-[#4a4a4a] border-[#d5d5cf] hover:bg-[#f5f5f0]")}
+                      >
+                        漂移车 (己方车)
+                      </button>
+                      <button
+                        onClick={() => setActiveCheat(activeCheat === 'betray' ? 'none' : 'betray')}
+                        className={cn("py-2 px-2 text-sm rounded-xl border transition-all", activeCheat === 'betray' ? "bg-[#5A5A40] text-white border-[#5A5A40]" : "bg-white text-[#4a4a4a] border-[#d5d5cf] hover:bg-[#f5f5f0]")}
+                      >
+                        策反 (敌方棋子)
+                      </button>
+                    </div>
+                    
+                    <div className="pt-2 border-t border-[#e5e5df]">
+                      <div className="text-sm mb-2">复活阵亡棋子:</div>
+                      <div className="flex flex-wrap gap-1">
+                        {game.capturedPieces.filter(p => p.color === playerColor).map((p, i) => (
+                          <button
+                            key={i}
+                            onClick={() => {
+                              setRevivePiece(p);
+                              setActiveCheat('revive');
+                            }}
+                            className={cn(
+                              "w-8 h-8 rounded-full border flex items-center justify-center text-sm font-bold",
+                              activeCheat === 'revive' && revivePiece === p ? "bg-[#5A5A40] text-white border-[#5A5A40]" : "bg-white text-[#4a4a4a] border-[#d5d5cf] hover:bg-[#f5f5f0]"
+                            )}
+                          >
+                            {p.type === 'r' ? '车' : p.type === 'h' ? '马' : p.type === 'c' ? '炮' : p.type === 'e' ? '相' : p.type === 'a' ? '仕' : '兵'}
+                          </button>
+                        ))}
+                        {game.capturedPieces.filter(p => p.color === playerColor).length === 0 && (
+                          <span className="text-xs text-[#999]">无阵亡棋子</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right Panel - Board */}
+          <div className="relative flex flex-col items-center">
+            {mode !== 'edit' && (
+              <div className="flex items-center justify-between w-full max-w-md px-6 py-3 bg-white rounded-full shadow-sm border border-[#e5e5df] mb-6">
+                <div className="flex items-center gap-2">
+                  <div className={cn("w-3 h-3 rounded-full", playerColor === 'red' ? 'bg-[#8B0000]' : 'bg-[#2c2c2c]')} />
+                  <span className="font-medium text-lg">{playerColor === 'red' ? '红方' : '黑方'}</span>
+                </div>
+                <div className="text-sm text-[#666] italic">
+                  {mode === 'ai' ? '(电脑)' : '(玩家 2)'}
                 </div>
               </div>
             )}
@@ -575,238 +606,79 @@ export default function App() {
               />
               
               {gameOver && mode !== 'edit' && (
-                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-lg z-50">
-                  <h2 className="text-4xl font-bold text-stone-800 mb-6">{gameOver}</h2>
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-[24px] z-50">
+                  <h2 className="text-5xl font-bold text-[#1a1a1a] mb-8">{gameOver}</h2>
                   <button
                     onClick={() => {
                       if (mode === 'ai') startAI(playerColor as 'red' | 'black');
                       else if (mode === 'local') startLocal();
                       else setMode('menu');
                     }}
-                    className="px-8 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-medium transition-colors"
+                    className="px-10 py-4 bg-[#8B0000] hover:bg-[#6B0000] text-white rounded-full font-medium transition-all shadow-lg hover:shadow-xl text-lg"
                   >
-                    {mode === 'online' ? '返回主菜单' : '再来一局'}
+                    再来一局
                   </button>
                 </div>
               )}
             </div>
-
-            {mode !== 'edit' && (
-              <div className="flex items-center justify-between w-full max-w-md px-4 py-2 bg-white rounded-lg shadow-sm">
-                <div className="flex items-center gap-2">
-                  <div className={`w-3 h-3 rounded-full ${game.turn === playerColor || (mode==='local' && game.turn==='red') ? (playerColor === 'black' ? 'bg-black' : 'bg-red-500') : 'bg-stone-300'}`} />
-                  <span className="font-medium">{playerColor === 'black' ? '黑方' : '红方'}</span>
-                </div>
-                <div className="text-sm text-stone-500">
-                  {mode === 'local' ? '(玩家 1)' : '(你)'}
-                </div>
-              </div>
-            )}
           </div>
+        </div>
+      )}
 
-          {/* Cheat Mode Palette */}
-          {(mode === 'online' || mode === 'ai') && (
-            <div className="w-full max-w-xs flex flex-col gap-4">
-              {!isCheatModeUnlocked && (
-                <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200">
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      value={cheatPassword}
-                      onChange={e => setCheatPassword(e.target.value)}
-                      placeholder="请输入密码"
-                      className="flex-1 px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    />
-                    <button
-                      onClick={() => {
-                        if (cheatPassword === '244039') {
-                          setIsCheatModeUnlocked(true);
-                          setCheatPassword('');
-                        } else {
-                          alert('密码错误');
-                        }
-                      }}
-                      className="px-4 py-2 bg-stone-800 hover:bg-stone-900 text-white rounded-lg text-sm font-medium transition-colors"
-                    >
-                      解锁
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {isCheatModeUnlocked && (
-                <div className="bg-white p-5 rounded-xl shadow-xl border border-red-200">
-                  <h3 className="text-lg font-bold text-red-600 mb-4 flex items-center gap-2">
-                    🔥 开挂模式
-                  </h3>
-                  <div className="flex flex-col gap-3">
-                    <button
-                      onClick={() => setActiveCheat(activeCheat === 'armor' ? 'none' : 'armor')}
-                      className={cn("py-3 px-4 text-sm font-medium rounded-lg border transition-colors text-left", activeCheat === 'armor' ? "bg-red-50 border-red-500 text-red-700" : "bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100")}
-                    >
-                      🛡️ 装甲兵 (选己方兵)
-                    </button>
-                    <button
-                      onClick={() => setActiveCheat(activeCheat === 'drift' ? 'none' : 'drift')}
-                      className={cn("py-3 px-4 text-sm font-medium rounded-lg border transition-colors text-left", activeCheat === 'drift' ? "bg-red-50 border-red-500 text-red-700" : "bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100")}
-                    >
-                      🏎️ 漂移车 (选己方车)
-                    </button>
-                    <button
-                      onClick={() => {
-                        setActiveCheat(activeCheat === 'revive' ? 'none' : 'revive');
-                        setRevivePiece(null);
-                      }}
-                      className={cn("py-3 px-4 text-sm font-medium rounded-lg border transition-colors text-left", activeCheat === 'revive' ? "bg-red-50 border-red-500 text-red-700" : "bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100")}
-                    >
-                      ✨ 复活 (选被吃棋子)
-                    </button>
-                    {activeCheat === 'revive' && (
-                      <div className="flex flex-wrap gap-2 mt-1 p-3 bg-stone-100 rounded-lg border border-stone-200">
-                        {game.capturedPieces.filter(p => p.color === playerColor).map((p, i) => (
-                          <button
-                            key={i}
-                            onClick={() => setRevivePiece(p)}
-                            className={cn("w-10 h-10 rounded-full border-2 flex items-center justify-center text-lg font-bold transition-all",
-                              p.color === 'red' ? "text-red-600 border-red-700 bg-[#ffe4b5]" : "text-black border-gray-800 bg-[#ffe4b5]",
-                              revivePiece === p ? "ring-4 ring-blue-400 scale-110" : "hover:scale-105"
-                            )}
-                            style={{ fontFamily: '"Kaiti", "STKaiti", serif' }}
-                          >
-                            {PIECE_CHARS[`${p.color}-${p.type}`]}
-                          </button>
-                        ))}
-                        {game.capturedPieces.filter(p => p.color === playerColor).length === 0 && (
-                          <span className="text-sm text-stone-500 w-full text-center py-2">无被吃棋子</span>
-                        )}
-                      </div>
-                    )}
-                    <button
-                      onClick={() => setActiveCheat(activeCheat === 'betray' ? 'none' : 'betray')}
-                      className={cn("py-3 px-4 text-sm font-medium rounded-lg border transition-colors text-left", activeCheat === 'betray' ? "bg-red-50 border-red-500 text-red-700" : "bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100")}
-                    >
-                      🤝 叛变 (选敌方进攻棋子)
-                    </button>
-                  </div>
-                  {activeCheat !== 'none' && (
-                    <p className="mt-4 text-xs text-red-500 font-medium text-center">
-                      请在棋盘上点击目标位置/棋子
-                    </p>
-                  )}
-                </div>
-              )}
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white p-8 rounded-[32px] shadow-2xl w-full max-w-sm border border-[#e5e5df]">
+            <h2 className="text-3xl font-bold mb-8 text-[#1a1a1a] text-center">设置</h2>
+            
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-[#666] mb-2">人机难度</label>
+              <select 
+                value={aiDifficulty} 
+                onChange={e => setAiDifficulty(Number(e.target.value))}
+                className="w-full border border-[#d5d5cf] rounded-xl px-4 py-3 bg-[#f5f5f0] focus:outline-none focus:border-[#5A5A40]"
+              >
+                <option value={1}>普通 (Normal)</option>
+                <option value={2}>村冠 (Village Champion)</option>
+                <option value={3}>镇冠 (Town Champion)</option>
+                <option value={4}>县冠 (County Champion)</option>
+                <option value={5}>大师 (Master)</option>
+              </select>
             </div>
-          )}
 
-          {/* Edit Mode Palette */}
-          {mode === 'edit' && (
-            <div className="bg-white p-6 rounded-2xl shadow-xl border border-stone-200 w-full max-w-xs">
-              <h3 className="text-lg font-bold text-stone-800 mb-4">编辑工具</h3>
-              
-              <div className="mb-6">
-                <h4 className="text-sm font-medium text-stone-500 mb-2">红方棋子</h4>
-                <div className="flex flex-wrap gap-2">
-                  {(['k', 'a', 'e', 'h', 'r', 'c', 'p'] as PieceType[]).map(type => (
-                    <button
-                      key={`red-${type}`}
-                      onClick={() => setEditPiece({ color: 'red', type })}
-                      className={cn(
-                        "w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold border-2 text-red-600 border-red-700 bg-[#ffe4b5]",
-                        editPiece !== 'eraser' && editPiece?.color === 'red' && editPiece?.type === type && "ring-4 ring-blue-400"
-                      )}
-                      style={{ fontFamily: '"Kaiti", "STKaiti", serif' }}
-                    >
-                      {PIECE_CHARS[`red-${type}`]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <h4 className="text-sm font-medium text-stone-500 mb-2">黑方棋子</h4>
-                <div className="flex flex-wrap gap-2">
-                  {(['k', 'a', 'e', 'h', 'r', 'c', 'p'] as PieceType[]).map(type => (
-                    <button
-                      key={`black-${type}`}
-                      onClick={() => setEditPiece({ color: 'black', type })}
-                      className={cn(
-                        "w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold border-2 text-black border-gray-800 bg-[#ffe4b5]",
-                        editPiece !== 'eraser' && editPiece?.color === 'black' && editPiece?.type === type && "ring-4 ring-blue-400"
-                      )}
-                      style={{ fontFamily: '"Kaiti", "STKaiti", serif' }}
-                    >
-                      {PIECE_CHARS[`black-${type}`]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <button
-                  onClick={() => setEditPiece('eraser')}
-                  className={cn(
-                    "flex items-center gap-2 px-4 py-2 rounded-lg border-2 font-medium",
-                    editPiece === 'eraser' ? "border-blue-500 bg-blue-50 text-blue-700" : "border-stone-300 text-stone-600 hover:bg-stone-50"
-                  )}
-                >
-                  <Eraser className="w-5 h-5" /> 橡皮擦
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                <button
-                  onClick={() => {
-                    const newGame = new Xiangqi();
-                    newGame.clearBoard();
-                    setGame(newGame);
-                  }}
-                  className="w-full flex items-center justify-center gap-2 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg font-medium transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" /> 清空棋盘
-                </button>
-                <button
-                  onClick={() => {
-                    const newGame = new Xiangqi();
-                    setGame(newGame);
-                  }}
-                  className="w-full flex items-center justify-center gap-2 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg font-medium transition-colors"
-                >
-                  <RefreshCw className="w-4 h-4" /> 初始局面
-                </button>
-                
-                <div className="pt-4 border-t border-stone-200">
-                  <h4 className="text-sm font-medium text-stone-500 mb-2">从当前局面开始:</h4>
-                  <button
-                    onClick={() => {
-                      setPlayerColor('red');
-                      setMode('ai');
-                    }}
-                    className="w-full flex items-center justify-center gap-2 py-2 mb-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
-                  >
-                    <Play className="w-4 h-4" /> 人机对战 (执红)
-                  </button>
-                  <button
-                    onClick={() => {
-                      setPlayerColor('black');
-                      setMode('ai');
-                    }}
-                    className="w-full flex items-center justify-center gap-2 py-2 mb-2 bg-stone-800 hover:bg-stone-900 text-white rounded-lg font-medium transition-colors"
-                  >
-                    <Play className="w-4 h-4" /> 人机对战 (执黑)
-                  </button>
-                  <button
-                    onClick={() => {
-                      setPlayerColor('both');
-                      setMode('local');
-                    }}
-                    className="w-full flex items-center justify-center gap-2 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors"
-                  >
-                    <Users className="w-4 h-4" /> 本地双人
-                  </button>
-                </div>
-              </div>
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-[#666] mb-2">棋盘样式</label>
+              <select 
+                value={boardTheme} 
+                onChange={e => setBoardTheme(e.target.value as BoardTheme)}
+                className="w-full border border-[#d5d5cf] rounded-xl px-4 py-3 bg-[#f5f5f0] focus:outline-none focus:border-[#5A5A40]"
+              >
+                <option value="classic">经典</option>
+                <option value="wood">木纹</option>
+                <option value="paper">纸质</option>
+              </select>
             </div>
-          )}
+
+            <div className="mb-8">
+              <label className="block text-sm font-medium text-[#666] mb-2">棋子样式</label>
+              <select 
+                value={pieceTheme} 
+                onChange={e => setPieceTheme(e.target.value as PieceTheme)}
+                className="w-full border border-[#d5d5cf] rounded-xl px-4 py-3 bg-[#f5f5f0] focus:outline-none focus:border-[#5A5A40]"
+              >
+                <option value="classic">经典</option>
+                <option value="wood">木质</option>
+                <option value="flat">扁平</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => setShowSettings(false)}
+              className="w-full py-4 bg-[#5A5A40] hover:bg-[#4A4A30] text-white rounded-full font-medium transition-all shadow-md hover:shadow-lg"
+            >
+              确定
+            </button>
+          </div>
         </div>
       )}
     </div>

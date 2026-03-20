@@ -1,4 +1,5 @@
 import { Xiangqi, Move, PieceColor } from './xiangqi';
+import { getOpeningMove } from './openingBook';
 
 const PIECE_VALUES = {
   k: 10000,
@@ -157,16 +158,49 @@ function quiescenceSearch(game: Xiangqi, alpha: number, beta: number, color: Pie
   return alpha;
 }
 
-export function getBestMove(game: Xiangqi, depth: number): Move | null {
+export function getBestMove(
+  game: Xiangqi, 
+  difficulty: number, 
+  reportProgress?: (p: number) => void
+): Move | null {
   const winner = game.getWinner();
   if (winner) return null;
 
-  const color = game.turn;
-  let bestMove: Move | null = null;
-  let bestScore = -Infinity;
+  // Use opening book for difficulty 3 (镇冠) and above
+  if (difficulty >= 3) {
+    const openingMove = getOpeningMove(game.history);
+    if (openingMove) {
+      // Verify the move is actually valid in the current game state
+      const validMoves = game.getAllValidMoves(game.turn);
+      const isValid = validMoves.some(m => 
+        m.from.r === openingMove.from.r && 
+        m.from.c === openingMove.from.c && 
+        m.to.r === openingMove.to.r && 
+        m.to.c === openingMove.to.c
+      );
+      if (isValid) {
+        if (reportProgress) reportProgress(100);
+        return openingMove;
+      }
+    }
+  }
 
+  // Map difficulty to search depth and time limits
+  // 1: 普通 (Normal) -> depth 1, 1s
+  // 2: 村冠 (Village Champion) -> depth 2, 2s
+  // 3: 镇冠 (Town Champion) -> depth 3, 3s
+  // 4: 县冠 (County Champion) -> depth 4, 4s
+  // 5: 大师 (Master) -> depth 5, 8s
+  const maxDepth = difficulty === 5 ? 5 : difficulty === 4 ? 4 : difficulty;
+  const maxTime = difficulty === 5 ? 8000 : difficulty === 4 ? 4000 : difficulty * 1000;
+  const startTime = Date.now();
+
+  const color = game.turn;
   const moves = game.getAllValidMoves(color);
   if (moves.length === 0) return null;
+
+  // Randomize slightly to avoid identical games
+  moves.sort(() => Math.random() - 0.5);
 
   // Move ordering: captures first, then forward moves
   moves.sort((a, b) => {
@@ -178,17 +212,57 @@ export function getBestMove(game: Xiangqi, depth: number): Move | null {
     return 0;
   });
 
-  for (const move of moves) {
-    const clone = game.clone();
-    clone.makeMove(move);
-    const score = -alphaBeta(clone, depth - 1, -Infinity, Infinity, color === 'red' ? 'black' : 'red');
-    if (score > bestScore) {
-      bestScore = score;
-      bestMove = move;
+  let globalBestMove: Move | null = moves[0];
+
+  for (let d = 1; d <= maxDepth; d++) {
+    let depthBestMove: Move | null = null;
+    let depthBestScore = -Infinity;
+    let alpha = -Infinity;
+    const beta = Infinity;
+
+    for (let i = 0; i < moves.length; i++) {
+      const move = moves[i];
+      const clone = game.clone();
+      clone.makeMove(move);
+      
+      // Add a tiny random factor to the score (-5 to +5) for randomness
+      const randomJitter = Math.random() * 10 - 5;
+      const score = -alphaBeta(clone, d - 1, -beta, -alpha, color === 'red' ? 'black' : 'red') + randomJitter;
+      
+      if (score > depthBestScore) {
+        depthBestScore = score;
+        depthBestMove = move;
+      }
+      if (depthBestScore > alpha) {
+        alpha = depthBestScore;
+      }
+
+      if (reportProgress) {
+        const baseProgress = ((d - 1) / maxDepth) * 100;
+        const depthProgress = ((i + 1) / moves.length) * (100 / maxDepth);
+        reportProgress(Math.min(99, Math.round(baseProgress + depthProgress)));
+      }
+
+      const elapsed = Date.now() - startTime;
+      if (elapsed > maxTime && globalBestMove) {
+        if (reportProgress) reportProgress(100);
+        return depthBestMove || globalBestMove;
+      }
+    }
+    
+    if (depthBestMove) {
+      globalBestMove = depthBestMove;
+      // Put the best move first for the next depth (Principal Variation move ordering)
+      const bestIdx = moves.indexOf(depthBestMove);
+      if (bestIdx > 0) {
+        moves.splice(bestIdx, 1);
+        moves.unshift(depthBestMove);
+      }
     }
   }
 
-  return bestMove || moves[0];
+  if (reportProgress) reportProgress(100);
+  return globalBestMove;
 }
 
 function alphaBeta(game: Xiangqi, depth: number, alpha: number, beta: number, color: PieceColor): number {

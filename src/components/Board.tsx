@@ -3,6 +3,7 @@ import { Xiangqi, Move } from '../game/xiangqi';
 import { motion } from 'motion/react';
 import { twMerge } from 'tailwind-merge';
 import { clsx } from 'clsx';
+import { playPickSound } from '../utils/sounds';
 
 function cn(...args: (string | undefined | null | false)[]) {
   return twMerge(clsx(args));
@@ -32,14 +33,20 @@ interface BoardProps {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Piece3D: renders a single lacquered wooden chess disc with:
-//   - Multi-stop radial gradient (bright top-left → dark bottom-right)
-//   - Gloss highlight overlay (top-left ellipse)
-//   - Inner decorative ring
-//   - Multi-layer box-shadow (drop + inner highlight + inner shadow)
-//   - Selection blue halo
+// PieceDisc
+//
+// Design goal: keep the ORIGINAL piece look (ivory background,
+// red/black characters, border ring) but add just enough shadow
+// to give a flat, coin-like 3D depth — nothing more.
+//
+// All three themes use the same approach:
+//   • Solid face colour (not a wild gradient)
+//   • Thin rim border
+//   • Inner decorative ring
+//   • Drop shadow underneath + inner highlight on top = coin depth
+//   • Character colour unchanged from original
 // ─────────────────────────────────────────────────────────────────
-const Piece3D = React.memo(function Piece3D({
+const PieceDisc = React.memo(function PieceDisc({
   char, isRed, isSelected, isArmored, isDrifting, theme, size,
 }: {
   char: string;
@@ -52,74 +59,55 @@ const Piece3D = React.memo(function Piece3D({
 }) {
   const s = size;
 
-  // --- colour tokens ---
-  let gradient: string;
-  let rimColor: string;
+  // ── per-theme tokens (face / rim / ring / text) ──────────────
+  // Face colours are deliberately close to the original app values.
+  // Text colour stays true red (#cc0000) or true black (#111).
+  let face: string;
+  let rim: string;
+  let ring: string;
   let textColor: string;
-  let ringColor: string;
-  let shadowRgba: string;
+  let dropShadow: string;        // cast shadow beneath piece
+  let innerHighlight: string;    // top-left bright gloss
+  let innerShadow: string;       // bottom-right depth shadow
 
   if (theme === 'flat') {
-    gradient    = isRed ? '#fff0e0' : '#f4f0e8';
-    rimColor    = isRed ? '#cc3333' : '#555555';
-    textColor   = isRed ? '#990000' : '#1a1a1a';
-    ringColor   = isRed ? '#ee8888' : '#aaaaaa';
-    shadowRgba  = isRed ? 'rgba(160,50,50,0.38)' : 'rgba(50,50,50,0.38)';
+    // Flat = almost no 3D; just a subtle border + faint drop shadow
+    face          = isRed ? '#ffe4b5' : '#ffe4b5';   // same ivory for both
+    rim           = isRed ? '#cc0000' : '#1a1a1a';
+    ring          = isRed ? '#cc0000' : '#1a1a1a';
+    textColor     = isRed ? '#cc0000' : '#111111';
+    dropShadow    = `0 2px 4px rgba(0,0,0,0.22)`;
+    innerHighlight = '';
+    innerShadow   = '';
   } else if (theme === 'wood') {
-    if (isRed) {
-      gradient   = `radial-gradient(ellipse 64% 56% at 34% 26%,
-        #fff5c0 0%, #f5c840 20%, #d48a0c 52%, #8b5400 80%, #4a2c00 100%)`;
-      rimColor   = '#6a3c00';
-      textColor  = '#5a0000';
-      ringColor  = '#c08820';
-      shadowRgba = 'rgba(90,48,0,0.68)';
-    } else {
-      gradient   = `radial-gradient(ellipse 64% 56% at 34% 26%,
-        #f0e8cc 0%, #d0b068 20%, #9c7038 52%, #5a3c18 80%, #2c1c08 100%)`;
-      rimColor   = '#2c1808';
-      textColor  = '#100a02';
-      ringColor  = '#785838';
-      shadowRgba = 'rgba(12,8,2,0.68)';
-    }
+    // Wood = warm amber-ivory face, brown rim
+    face          = isRed ? '#f5d98a' : '#e8d090';
+    rim           = isRed ? '#9b1c00' : '#2c1a08';
+    ring          = isRed ? '#b83000' : '#4a3018';
+    textColor     = isRed ? '#cc0000' : '#111111';
+    dropShadow    = `0 ${Math.round(s*0.05)}px ${Math.round(s*0.12)}px rgba(0,0,0,0.38)`;
+    innerHighlight = `inset 0 ${Math.round(s*0.06)}px ${Math.round(s*0.12)}px rgba(255,255,255,0.50)`;
+    innerShadow    = `inset 0 -${Math.round(s*0.04)}px ${Math.round(s*0.09)}px rgba(0,0,0,0.20)`;
   } else {
-    // classic — richest lacquer finish
-    if (isRed) {
-      gradient   = `radial-gradient(ellipse 64% 56% at 34% 26%,
-        #ffffff 0%, #ffe898 14%, #ffcc40 36%, #d48800 62%, #8a5000 84%, #4c2800 100%)`;
-      rimColor   = '#8a5200';
-      textColor  = '#780000';
-      ringColor  = '#d4a020';
-      shadowRgba = 'rgba(120,70,0,0.64)';
-    } else {
-      gradient   = `radial-gradient(ellipse 64% 56% at 34% 26%,
-        #ffffff 0%, #f2e8d4 14%, #d8c498 36%, #a08860 62%, #5c3c20 84%, #2c1808 100%)`;
-      rimColor   = '#3a2410';
-      textColor  = '#0c0804';
-      ringColor  = '#806448';
-      shadowRgba = 'rgba(12,8,4,0.68)';
-    }
+    // Classic = original ivory #ffe4b5, red/black rim, subtle 3D
+    face          = '#ffe4b5';
+    rim           = isRed ? '#9b1c00' : '#2a1a0a';
+    ring          = isRed ? '#b83000' : '#4a3018';
+    textColor     = isRed ? '#cc0000' : '#111111';
+    dropShadow    = `0 ${Math.round(s*0.055)}px ${Math.round(s*0.13)}px rgba(0,0,0,0.35)`;
+    innerHighlight = `inset 0 ${Math.round(s*0.065)}px ${Math.round(s*0.13)}px rgba(255,255,255,0.55)`;
+    innerShadow    = `inset 0 -${Math.round(s*0.04)}px ${Math.round(s*0.09)}px rgba(0,0,0,0.18)`;
   }
 
-  const rimW        = Math.max(2, Math.round(s * 0.055));
-  const innerRing   = Math.round(s * 0.09);
-  const shadowY     = Math.round(s * 0.055);
-  const shadowBlur  = Math.round(s * 0.15);
-  const shadowSprea = Math.round(s * 0.02);
+  const rimW  = Math.max(2, Math.round(s * 0.055));
+  const ringI = Math.round(s * 0.10);   // inner ring inset
 
   const boxShadow = [
-    // 1. cast shadow
-    `0 ${shadowY}px ${shadowBlur}px ${shadowSprea}px ${shadowRgba}`,
-    // 2. inner top-left highlight (convex gloss)
-    theme !== 'flat'
-      ? `inset 0 ${Math.round(s*0.07)}px ${Math.round(s*0.14)}px rgba(255,255,255,0.55)`
-      : undefined,
-    // 3. inner bottom-right shadow (depth)
-    theme !== 'flat'
-      ? `inset 0 -${Math.round(s*0.05)}px ${Math.round(s*0.10)}px rgba(0,0,0,0.40)`
-      : undefined,
-    // 4. selection halo
+    dropShadow,
+    innerHighlight || undefined,
+    innerShadow    || undefined,
     isSelected
-      ? `0 0 0 ${Math.round(s*0.10)}px rgba(59,130,246,0.92), 0 0 ${Math.round(s*0.22)}px rgba(59,130,246,0.55)`
+      ? `0 0 0 ${Math.round(s*0.10)}px rgba(59,130,246,0.90), 0 0 ${Math.round(s*0.20)}px rgba(59,130,246,0.45)`
       : undefined,
   ].filter(Boolean).join(', ');
 
@@ -127,8 +115,8 @@ const Piece3D = React.memo(function Piece3D({
     <div style={{
       width: s, height: s,
       borderRadius: '50%',
-      background: gradient,
-      border: `${rimW}px solid ${rimColor}`,
+      background: face,
+      border: `${rimW}px solid ${rim}`,
       boxShadow,
       position: 'relative',
       display: 'flex',
@@ -137,43 +125,31 @@ const Piece3D = React.memo(function Piece3D({
       flexShrink: 0,
       userSelect: 'none',
     }}>
-      {/* Decorative inner ring */}
-      {theme !== 'flat' && (
-        <div style={{
-          position: 'absolute', inset: innerRing,
-          borderRadius: '50%',
-          border: `1px solid ${ringColor}`,
-          opacity: 0.60,
-          pointerEvents: 'none',
-        }} />
-      )}
 
-      {/* Sharp gloss highlight — top-left ellipse */}
+      {/* Inner decorative ring */}
       {theme !== 'flat' && (
         <div style={{
           position: 'absolute',
-          top: Math.round(s * 0.07),
-          left: Math.round(s * 0.09),
-          width:  Math.round(s * 0.44),
-          height: Math.round(s * 0.30),
+          inset: ringI,
           borderRadius: '50%',
-          background: 'radial-gradient(ellipse at 38% 38%, rgba(255,255,255,0.76) 0%, rgba(255,255,255,0) 72%)',
-          transform: 'rotate(-18deg)',
+          border: `1px solid ${ring}`,
+          opacity: 0.55,
           pointerEvents: 'none',
         }} />
       )}
 
-      {/* Chinese character */}
+      {/* Chinese character — original colour, unchanged */}
       <span style={{
-        fontSize: s * 0.42,
+        fontSize: s * 0.44,
         fontFamily: '"STKaiti","KaiTi","Kaiti SC","Noto Serif SC",serif',
         fontWeight: 700,
         color: textColor,
         lineHeight: 1,
         position: 'relative',
         zIndex: 1,
+        // Very subtle emboss only on non-flat themes
         textShadow: theme !== 'flat'
-          ? '0 1px 2px rgba(255,255,255,0.48), 0 -1px 1px rgba(0,0,0,0.28)'
+          ? `0 1px 1px rgba(255,255,255,0.40), 0 -1px 0px rgba(0,0,0,0.15)`
           : 'none',
       }}>
         {char}
@@ -187,7 +163,7 @@ const Piece3D = React.memo(function Piece3D({
           background: '#facc15', color: '#000',
           fontSize: 7, fontWeight: 800, lineHeight: 1,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 3, boxShadow: '0 1px 3px rgba(0,0,0,0.55)',
+          zIndex: 3, boxShadow: '0 1px 3px rgba(0,0,0,0.45)',
         }}>甲</span>
       )}
 
@@ -199,7 +175,7 @@ const Piece3D = React.memo(function Piece3D({
           background: '#3b82f6', color: '#fff',
           fontSize: 7, fontWeight: 800, lineHeight: 1,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 3, boxShadow: '0 1px 3px rgba(0,0,0,0.55)',
+          zIndex: 3, boxShadow: '0 1px 3px rgba(0,0,0,0.45)',
         }}>飘</span>
       )}
     </div>
@@ -207,7 +183,99 @@ const Piece3D = React.memo(function Piece3D({
 });
 
 // ─────────────────────────────────────────────────────────────────
-// BOARD
+// HintArrow
+//
+// Draws an SVG arrow from the hint piece's origin cell to its
+// destination cell, overlaid on the board.  The arrow makes it
+// immediately obvious which piece to move and where.
+//
+// Layout note: the board inner area has width=CS*8, height=CS*9.
+// Each intersection is at (c*CS, r*CS) — the piece centres.
+// But click squares are positioned at (c*CS - CS/2, r*CS - CS/2),
+// so the visual centre of column c is at c*CS, row r is at r*CS.
+// ─────────────────────────────────────────────────────────────────
+function HintArrow({
+  hintMove, CS, isFlipped,
+}: {
+  hintMove: Move;
+  CS: number;
+  isFlipped: boolean;
+}) {
+  const fr = isFlipped ? 9 - hintMove.from.r : hintMove.from.r;
+  const fc = isFlipped ? 8 - hintMove.from.c : hintMove.from.c;
+  const tr = isFlipped ? 9 - hintMove.to.r   : hintMove.to.r;
+  const tc = isFlipped ? 8 - hintMove.to.c   : hintMove.to.c;
+
+  // Centre coords in the board inner SVG coordinate space
+  const x1 = fc * CS;
+  const y1 = fr * CS;
+  const x2 = tc * CS;
+  const y2 = tr * CS;
+
+  // Shorten the line at both ends so it doesn't overlap the pieces
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 1) return null;
+  const ux = dx / len, uy = dy / len;
+  const shrink = CS * 0.38;   // pull back from each piece centre
+  const sx1 = x1 + ux * shrink;
+  const sy1 = y1 + uy * shrink;
+  const sx2 = x2 - ux * shrink;
+  const sy2 = y2 - uy * shrink;
+
+  const BW = CS * 8, BH = CS * 9;
+  const arrowId = 'hint-arrow-head';
+
+  return (
+    <svg
+      width={BW} height={BH}
+      className="absolute pointer-events-none"
+      style={{ top: 0, left: 0, zIndex: 25 }}
+    >
+      <defs>
+        <marker
+          id={arrowId}
+          markerWidth="8" markerHeight="8"
+          refX="6" refY="3"
+          orient="auto"
+        >
+          <path d="M0,0 L0,6 L8,3 z"
+            fill="rgba(34,197,94,0.90)" />
+        </marker>
+      </defs>
+
+      {/* Glow / shadow line behind for contrast */}
+      <line
+        x1={sx1} y1={sy1} x2={sx2} y2={sy2}
+        stroke="rgba(0,0,0,0.25)"
+        strokeWidth={CS * 0.13}
+        strokeLinecap="round"
+      />
+
+      {/* Main arrow line */}
+      <line
+        x1={sx1} y1={sy1} x2={sx2} y2={sy2}
+        stroke="rgba(34,197,94,0.90)"
+        strokeWidth={CS * 0.09}
+        strokeLinecap="round"
+        markerEnd={`url(#${arrowId})`}
+        strokeDasharray={`${CS * 0.18} ${CS * 0.10}`}
+      />
+
+      {/* Origin highlight dot */}
+      <circle
+        cx={x1} cy={y1}
+        r={CS * 0.18}
+        fill="rgba(250,204,21,0.75)"
+        stroke="rgba(234,179,8,0.90)"
+        strokeWidth={CS * 0.04}
+      />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// BOARD COMPONENT
 // ─────────────────────────────────────────────────────────────────
 export function Board({
   game, playerColor, onMove,
@@ -218,10 +286,8 @@ export function Board({
   const [selected,   setSelected]   = React.useState<{ r: number; c: number } | null>(null);
   const [validMoves, setValidMoves] = React.useState<Move[]>([]);
   const [cellSize,   setCellSize]   = React.useState(44);
-  // Track which piece id just landed to trigger settle animation
-  const [justLanded, setJustLanded] = React.useState<string | null>(null);
 
-  // Responsive sizing
+  // Responsive cell size
   React.useEffect(() => {
     const upd = () => {
       const maxW = Math.floor((window.innerWidth  - 32) / 8);
@@ -233,19 +299,10 @@ export function Board({
     return () => window.removeEventListener('resize', upd);
   }, [extraReservedV]);
 
-  // On each new move: clear selection + trigger settle squish
+  // Clear selection on each new move (no bounce animation)
   React.useEffect(() => {
     setSelected(null);
     setValidMoves([]);
-    const last = game.history[game.history.length - 1];
-    if (last) {
-      const p = game.getPiece(last.to.r, last.to.c);
-      if (p?.id) {
-        setJustLanded(p.id);
-        const tid = window.setTimeout(() => setJustLanded(null), 360);
-        return () => window.clearTimeout(tid);
-      }
-    }
   }, [game.turn, game.history.length]);
 
   const handleClick = (r: number, c: number) => {
@@ -259,6 +316,7 @@ export function Board({
     }
     if (piece && piece.color === game.turn) {
       if (playerColor !== 'both' && piece.color !== playerColor) return;
+      playPickSound();
       setSelected({ r, c });
       setValidMoves(game.getValidMoves(r, c));
     } else {
@@ -287,9 +345,9 @@ export function Board({
         border: `3px solid ${lc}`,
         borderRadius: 10,
         boxShadow: [
-          '0 12px 40px rgba(0,0,0,0.45)',
-          '0 4px 10px rgba(0,0,0,0.28)',
-          'inset 0 1px 3px rgba(255,255,255,0.20)',
+          '0 10px 36px rgba(0,0,0,0.40)',
+          '0 3px 8px rgba(0,0,0,0.22)',
+          'inset 0 1px 3px rgba(255,255,255,0.18)',
         ].join(', '),
       }}
     >
@@ -325,17 +383,17 @@ export function Board({
 
       <div className="relative" style={{ width: BW, height: BH }}>
 
-        {/* Click squares + highlight overlays */}
+        {/* ── Click squares + highlight overlays ── */}
         {Array.from({ length: 10 }).map((_, r) =>
           Array.from({ length: 9 }).map((_, c) => {
             const aR = isFlipped ? 9-r : r;
             const aC = isFlipped ? 8-c : c;
-            const isValid    = validMoves.some(m => m.to.r===aR && m.to.c===aC);
-            const last       = game.history[game.history.length - 1];
-            const isLast     = !isEditMode && !!last &&
+            const isValid = validMoves.some(m => m.to.r===aR && m.to.c===aC);
+            const last    = game.history[game.history.length - 1];
+            const isLast  = !isEditMode && !!last &&
               ((last.from.r===aR&&last.from.c===aC)||(last.to.r===aR&&last.to.c===aC));
-            const hFrom = !!hintMove && hintMove.from.r===aR && hintMove.from.c===aC;
-            const hTo   = !!hintMove && hintMove.to.r===aR   && hintMove.to.c===aC;
+            // Hint: only show destination dot (arrow covers from→to)
+            const hTo = !!hintMove && hintMove.to.r===aR && hintMove.to.c===aC;
 
             return (
               <div key={`sq${r}${c}`}
@@ -343,32 +401,35 @@ export function Board({
                 style={{ width:CS, height:CS, left:c*CS-CS/2, top:r*CS-CS/2, zIndex:10 }}
                 onClick={() => handleClick(aR, aC)}
               >
-                {isLast && !hFrom && !hTo && (
+                {/* Last-move amber glow */}
+                {isLast && !hTo && (
                   <div className="absolute rounded-full pointer-events-none"
-                    style={{ width:CS*0.82, height:CS*0.82, background:'rgba(255,200,0,0.32)' }} />
+                    style={{ width:CS*0.82, height:CS*0.82, background:'rgba(255,200,0,0.30)' }} />
                 )}
-                {hFrom && (
-                  <div className="absolute rounded-full pointer-events-none animate-pulse"
-                    style={{ width:CS*0.82, height:CS*0.82,
-                      background:'rgba(250,204,21,0.48)', border:'2px solid rgba(234,179,8,0.88)' }} />
-                )}
+                {/* Hint destination dot */}
                 {hTo && (
                   <div className="absolute rounded-full pointer-events-none animate-pulse"
                     style={{ width:CS*0.82, height:CS*0.82,
-                      background:'rgba(34,197,94,0.36)', border:'2.5px solid rgba(22,163,74,0.88)' }} />
+                      background:'rgba(34,197,94,0.32)', border:'2.5px solid rgba(22,163,74,0.85)' }} />
                 )}
+                {/* Valid-move dot */}
                 {isValid && (
                   <div className="absolute rounded-full pointer-events-none"
                     style={{ width:CS*0.25, height:CS*0.25,
                       background:'rgba(59,130,246,0.80)',
-                      boxShadow:'0 0 6px 1px rgba(59,130,246,0.45)' }} />
+                      boxShadow:'0 0 6px 1px rgba(59,130,246,0.42)' }} />
                 )}
               </div>
             );
           })
         )}
 
-        {/* Pieces */}
+        {/* ── Hint arrow overlay (above highlights, below pieces) ── */}
+        {hintMove && (
+          <HintArrow hintMove={hintMove} CS={CS} isFlipped={isFlipped} />
+        )}
+
+        {/* ── Pieces (spring slide + scale on select, NO bounce) ── */}
         {Array.from({ length: 10 }).map((_, r) =>
           Array.from({ length: 9 }).map((_, c) => {
             const piece = game.getPiece(r, c);
@@ -376,28 +437,23 @@ export function Board({
             const dR   = isFlipped ? 9-r : r;
             const dC   = isFlipped ? 8-c : c;
             const isSel = selected?.r===r && selected?.c===c;
-            const landing = justLanded === piece.id;
-            const ps  = CS * 0.86;
+            const ps   = CS * 0.86;
 
             return (
               <motion.div
                 key={piece.id}
                 initial={false}
-                /* ── Position + lift-on-select ── */
                 animate={{
-                  left:  dC * CS - CS / 2,
-                  top:   dR * CS - CS / 2,
-                  scale: isSel ? 1.10 : 1,
+                  left:   dC * CS - CS / 2,
+                  top:    dR * CS - CS / 2,
+                  scale:  isSel ? 1.08 : 1,
                   zIndex: isSel ? 30 : 20,
                 }}
                 transition={{
-                  // Smooth physics slide — fast enough to feel responsive,
-                  // slow enough to follow the arc naturally
-                  left:  { type:'spring', stiffness:400, damping:30, mass:0.75 },
-                  top:   { type:'spring', stiffness:400, damping:30, mass:0.75 },
-                  // Snappy scale pop on selection
-                  scale: { type:'spring', stiffness:520, damping:26, mass:0.55 },
-                  zIndex:{ duration:0 },
+                  left:   { type: 'spring', stiffness: 400, damping: 30, mass: 0.75 },
+                  top:    { type: 'spring', stiffness: 400, damping: 30, mass: 0.75 },
+                  scale:  { type: 'spring', stiffness: 500, damping: 28, mass: 0.60 },
+                  zIndex: { duration: 0 },
                 }}
                 style={{
                   position: 'absolute',
@@ -406,38 +462,15 @@ export function Board({
                   pointerEvents: 'none',
                 }}
               >
-                {/*
-                  Settle "squish" is on a child div so it doesn't
-                  conflict with the parent's spring-based position.
-                  When landing=true the piece squishes down then bounces
-                  back, mimicking a physical piece hitting the board.
-                */}
-                <motion.div
-                  animate={landing
-                    ? {
-                        scaleY: [1, 0.88, 1.08, 0.96, 1.01, 1.00],
-                        scaleX: [1, 1.08, 0.94, 1.03, 0.99, 1.00],
-                      }
-                    : { scaleY: 1, scaleX: 1 }
-                  }
-                  transition={{
-                    duration: 0.32,
-                    ease: [0.18, 1.2, 0.40, 1],
-                  }}
-                  style={{
-                    display:'flex', alignItems:'center', justifyContent:'center',
-                  }}
-                >
-                  <Piece3D
-                    char={PIECE_CHARS[`${piece.color}-${piece.type}`]}
-                    isRed={piece.color === 'red'}
-                    isSelected={isSel}
-                    isArmored={piece.isArmored}
-                    isDrifting={piece.isDrifting}
-                    theme={pieceTheme}
-                    size={ps}
-                  />
-                </motion.div>
+                <PieceDisc
+                  char={PIECE_CHARS[`${piece.color}-${piece.type}`]}
+                  isRed={piece.color === 'red'}
+                  isSelected={isSel}
+                  isArmored={piece.isArmored}
+                  isDrifting={piece.isDrifting}
+                  theme={pieceTheme}
+                  size={ps}
+                />
               </motion.div>
             );
           })

@@ -27,26 +27,33 @@ interface BoardProps {
   onSquareClickOverride?: (r: number, c: number) => void;
 }
 
-export function Board({ 
-  game, 
-  playerColor, 
-  onMove, 
-  boardTheme = 'classic', 
-  pieceTheme = 'classic',
-  isEditMode = false,
-  onEditClick,
-  onSquareClickOverride
+export function Board({
+  game, playerColor, onMove,
+  boardTheme = 'classic', pieceTheme = 'classic',
+  isEditMode = false, onEditClick, onSquareClickOverride
 }: BoardProps) {
   const [selected, setSelected] = React.useState<{ r: number; c: number } | null>(null);
   const [validMoves, setValidMoves] = React.useState<Move[]>([]);
-
-  const [cellSize, setCellSize] = React.useState(48);
+  const [cellSize, setCellSize] = React.useState(44);
+  const containerRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     const updateSize = () => {
-      const maxWidth = window.innerWidth - 32; // 16px padding on sides
-      const calculated = Math.floor((maxWidth - 48) / 8);
-      setCellSize(Math.min(48, Math.max(30, calculated)));
+      // Use the actual viewport — leave room for padding on both sides
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      // Board is 8 cells wide, 9 cells tall (intersections, so 8×9 grid of cells)
+      // We also need board padding ~12px each side
+      const boardPad = 24; // total horizontal padding inside board element
+      const maxByWidth  = Math.floor((vw - boardPad - 8) / 8);
+      // Estimate how much vertical space the board gets
+      // Top bar ~44, two strips ~28 each, bottom bar ~56+drawer
+      const reservedV = 44 + 28 + 28 + 60 + boardPad;
+      const maxByHeight = Math.floor((vh - reservedV) / 9);
+
+      const size = Math.max(28, Math.min(52, maxByWidth, maxByHeight));
+      setCellSize(size);
     };
     updateSize();
     window.addEventListener('resize', updateSize);
@@ -59,165 +66,163 @@ export function Board({
   }, [game.turn, game.history.length]);
 
   const handleSquareClick = (r: number, c: number) => {
-    if (onSquareClickOverride) {
-      onSquareClickOverride(r, c);
-      return;
-    }
-
-    if (isEditMode && onEditClick) {
-      onEditClick(r, c);
-      return;
-    }
-
+    if (onSquareClickOverride) { onSquareClickOverride(r, c); return; }
+    if (isEditMode && onEditClick) { onEditClick(r, c); return; }
     if (playerColor !== 'both' && game.turn !== playerColor) return;
 
     const piece = game.getPiece(r, c);
-
     if (selected) {
       const move = validMoves.find(m => m.to.r === r && m.to.c === c);
-      if (move && onMove) {
-        onMove(move);
-        setSelected(null);
-        setValidMoves([]);
-        return;
-      }
+      if (move && onMove) { onMove(move); setSelected(null); setValidMoves([]); return; }
     }
-
     if (piece && piece.color === game.turn) {
       if (playerColor !== 'both' && piece.color !== playerColor) return;
       setSelected({ r, c });
       setValidMoves(game.getValidMoves(r, c));
     } else {
-      setSelected(null);
-      setValidMoves([]);
+      setSelected(null); setValidMoves([]);
     }
   };
 
   const isFlipped = playerColor === 'black';
-  const CELL_SIZE = cellSize;
-  const BOARD_WIDTH = CELL_SIZE * 8;
-  const BOARD_HEIGHT = CELL_SIZE * 9;
+  const CS = cellSize;
+  const BOARD_W = CS * 8;
+  const BOARD_H = CS * 9;
+  const PAD = 12;
 
-  const boardThemes = {
-    classic: 'bg-[#f5deb3] border-amber-900',
-    wood: 'bg-[#d4a373] border-[#5c3a21]',
-    paper: 'bg-[#f4f1ea] border-[#5c5c5c]'
+  const boardBg: Record<BoardTheme, string> = {
+    classic: '#f5deb3',
+    wood: '#c8924a',
+    paper: '#f0ede4',
   };
-
-  const pieceThemes = {
-    classic: 'bg-[#ffe4b5] shadow-md border-2',
-    wood: 'bg-[#e6c280] shadow-[inset_0_-2px_4px_rgba(0,0,0,0.4),0_2px_4px_rgba(0,0,0,0.5)] border-[#8b5a2b] border',
-    flat: 'bg-white shadow-sm border border-gray-300'
-  };
-
-  const lineColors = {
+  const lineColor: Record<BoardTheme, string> = {
     classic: '#78350f',
-    wood: '#4a2e15',
-    paper: '#5c5c5c'
+    wood: '#3d1f08',
+    paper: '#5c5c5c',
   };
-
-  const lineColor = lineColors[boardTheme];
+  const pieceStyle: Record<PieceTheme, string> = {
+    classic: 'shadow-md border-2',
+    wood: 'shadow-[inset_0_-2px_4px_rgba(0,0,0,0.45),0_2px_5px_rgba(0,0,0,0.55)] border',
+    flat: 'shadow-sm border',
+  };
+  const pieceBg: Record<PieceTheme, string> = {
+    classic: '#ffe4b5',
+    wood: '#d4a055',
+    flat: '#ffffff',
+  };
+  const lc = lineColor[boardTheme];
 
   return (
-    <div className={cn("relative inline-block p-6 border-4 rounded-lg shadow-2xl select-none", boardThemes[boardTheme])}>
-      <svg width={BOARD_WIDTH} height={BOARD_HEIGHT} className="absolute top-6 left-6 pointer-events-none">
+    <div
+      ref={containerRef}
+      className="relative inline-block select-none rounded-lg shadow-2xl"
+      style={{ background: boardBg[boardTheme], padding: PAD, border: `3px solid ${lc}` }}
+    >
+      <svg
+        width={BOARD_W} height={BOARD_H}
+        className="absolute pointer-events-none"
+        style={{ top: PAD, left: PAD }}
+      >
         {/* Horizontal lines */}
         {Array.from({ length: 10 }).map((_, i) => (
-          <line key={`h-${i}`} x1={0} y1={i * CELL_SIZE} x2={BOARD_WIDTH} y2={i * CELL_SIZE} stroke={lineColor} strokeWidth="2" />
+          <line key={`h${i}`} x1={0} y1={i*CS} x2={BOARD_W} y2={i*CS} stroke={lc} strokeWidth={1.5} />
         ))}
-        {/* Vertical lines */}
+        {/* Vertical lines (split at river) */}
         {Array.from({ length: 9 }).map((_, i) => (
-          <React.Fragment key={`v-${i}`}>
-            <line x1={i * CELL_SIZE} y1={0} x2={i * CELL_SIZE} y2={CELL_SIZE * 4} stroke={lineColor} strokeWidth="2" />
-            <line x1={i * CELL_SIZE} y1={CELL_SIZE * 5} x2={i * CELL_SIZE} y2={BOARD_HEIGHT} stroke={lineColor} strokeWidth="2" />
+          <React.Fragment key={`v${i}`}>
+            <line x1={i*CS} y1={0} x2={i*CS} y2={CS*4} stroke={lc} strokeWidth={1.5} />
+            <line x1={i*CS} y1={CS*5} x2={i*CS} y2={BOARD_H} stroke={lc} strokeWidth={1.5} />
           </React.Fragment>
         ))}
-        {/* Connecting side lines for the river */}
-        <line x1={0} y1={CELL_SIZE * 4} x2={0} y2={CELL_SIZE * 5} stroke={lineColor} strokeWidth="2" />
-        <line x1={BOARD_WIDTH} y1={CELL_SIZE * 4} x2={BOARD_WIDTH} y2={CELL_SIZE * 5} stroke={lineColor} strokeWidth="2" />
-        
+        {/* Side verticals bridging river */}
+        <line x1={0} y1={CS*4} x2={0} y2={CS*5} stroke={lc} strokeWidth={1.5} />
+        <line x1={BOARD_W} y1={CS*4} x2={BOARD_W} y2={CS*5} stroke={lc} strokeWidth={1.5} />
         {/* Palace diagonals */}
-        <line x1={CELL_SIZE * 3} y1={0} x2={CELL_SIZE * 5} y2={CELL_SIZE * 2} stroke={lineColor} strokeWidth="2" />
-        <line x1={CELL_SIZE * 5} y1={0} x2={CELL_SIZE * 3} y2={CELL_SIZE * 2} stroke={lineColor} strokeWidth="2" />
-        <line x1={CELL_SIZE * 3} y1={CELL_SIZE * 7} x2={CELL_SIZE * 5} y2={CELL_SIZE * 9} stroke={lineColor} strokeWidth="2" />
-        <line x1={CELL_SIZE * 5} y1={CELL_SIZE * 7} x2={CELL_SIZE * 3} y2={CELL_SIZE * 9} stroke={lineColor} strokeWidth="2" />
-        
+        <line x1={CS*3} y1={0} x2={CS*5} y2={CS*2} stroke={lc} strokeWidth={1.5} />
+        <line x1={CS*5} y1={0} x2={CS*3} y2={CS*2} stroke={lc} strokeWidth={1.5} />
+        <line x1={CS*3} y1={CS*7} x2={CS*5} y2={CS*9} stroke={lc} strokeWidth={1.5} />
+        <line x1={CS*5} y1={CS*7} x2={CS*3} y2={CS*9} stroke={lc} strokeWidth={1.5} />
         {/* River text */}
-        <text x={CELL_SIZE * 2} y={CELL_SIZE * 4.6} fill={lineColor} fontSize={CELL_SIZE * 0.5} fontFamily='"Kaiti", "STKaiti", serif' textAnchor="middle">楚 河</text>
-        <text x={CELL_SIZE * 6} y={CELL_SIZE * 4.6} fill={lineColor} fontSize={CELL_SIZE * 0.5} fontFamily='"Kaiti", "STKaiti", serif' textAnchor="middle">汉 界</text>
-
-        {/* Outer border to ensure it's exactly as thick as inner lines */}
-        <rect x={1} y={1} width={BOARD_WIDTH - 2} height={BOARD_HEIGHT - 2} fill="none" stroke={lineColor} strokeWidth="2" />
+        <text x={CS*2} y={CS*4.62} fill={lc} fontSize={CS*0.42}
+          fontFamily='"STKaiti","KaiTi","Kaiti SC",serif' textAnchor="middle">楚 河</text>
+        <text x={CS*6} y={CS*4.62} fill={lc} fontSize={CS*0.42}
+          fontFamily='"STKaiti","KaiTi","Kaiti SC",serif' textAnchor="middle">汉 界</text>
+        {/* Outer rect */}
+        <rect x={0.5} y={0.5} width={BOARD_W-1} height={BOARD_H-1} fill="none" stroke={lc} strokeWidth={1.5} />
       </svg>
 
-      <div className="relative" style={{ width: BOARD_WIDTH, height: BOARD_HEIGHT }}>
+      <div className="relative" style={{ width: BOARD_W, height: BOARD_H }}>
+        {/* Click zones */}
         {Array.from({ length: 10 }).map((_, r) =>
           Array.from({ length: 9 }).map((_, c) => {
-            const actualR = isFlipped ? 9 - r : r;
-            const actualC = isFlipped ? 8 - c : c;
-            const isValidMove = validMoves.some(m => m.to.r === actualR && m.to.c === actualC);
-            const lastMove = game.history[game.history.length - 1];
-            const isLastMove = !isEditMode && lastMove && ((lastMove.from.r === actualR && lastMove.from.c === actualC) || (lastMove.to.r === actualR && lastMove.to.c === actualC));
-
+            const aR = isFlipped ? 9-r : r;
+            const aC = isFlipped ? 8-c : c;
+            const isValid = validMoves.some(m => m.to.r===aR && m.to.c===aC);
+            const last = game.history[game.history.length-1];
+            const isLast = !isEditMode && last &&
+              ((last.from.r===aR&&last.from.c===aC)||(last.to.r===aR&&last.to.c===aC));
             return (
-              <div
-                key={`square-${r}-${c}`}
+              <div key={`sq${r}${c}`}
                 className="absolute flex items-center justify-center cursor-pointer z-10"
-                style={{
-                  width: CELL_SIZE,
-                  height: CELL_SIZE,
-                  left: c * CELL_SIZE - CELL_SIZE / 2,
-                  top: r * CELL_SIZE - CELL_SIZE / 2,
-                }}
-                onClick={() => handleSquareClick(actualR, actualC)}
+                style={{ width:CS, height:CS, left:c*CS-CS/2, top:r*CS-CS/2 }}
+                onClick={() => handleSquareClick(aR, aC)}
               >
-                {isLastMove && <div className="absolute bg-yellow-400/40 rounded-full pointer-events-none" style={{ width: CELL_SIZE * 0.85, height: CELL_SIZE * 0.85 }} />}
-                {isValidMove && <div className="absolute bg-green-500 rounded-full z-10 pointer-events-none" style={{ width: CELL_SIZE * 0.25, height: CELL_SIZE * 0.25 }} />}
+                {isLast && (
+                  <div className="absolute rounded-full pointer-events-none"
+                    style={{ width:CS*0.82, height:CS*0.82, background:'rgba(255,215,0,0.35)' }} />
+                )}
+                {isValid && (
+                  <div className="absolute rounded-full z-10 pointer-events-none"
+                    style={{ width:CS*0.28, height:CS*0.28, background:'rgba(34,197,94,0.85)' }} />
+                )}
               </div>
             );
           })
         )}
 
+        {/* Pieces */}
         {Array.from({ length: 10 }).map((_, r) =>
           Array.from({ length: 9 }).map((_, c) => {
             const piece = game.getPiece(r, c);
             if (!piece) return null;
-
-            const displayR = isFlipped ? 9 - r : r;
-            const displayC = isFlipped ? 8 - c : c;
-            const isSelected = selected?.r === r && selected?.c === c;
+            const dR = isFlipped ? 9-r : r;
+            const dC = isFlipped ? 8-c : c;
+            const isSel = selected?.r===r && selected?.c===c;
+            const isRed = piece.color === 'red';
+            const pieceSize = CS * 0.84;
 
             return (
               <motion.div
                 key={piece.id}
                 initial={false}
-                animate={{
-                  left: displayC * CELL_SIZE - CELL_SIZE / 2,
-                  top: displayR * CELL_SIZE - CELL_SIZE / 2,
-                }}
-                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                animate={{ left: dC*CS - CS/2, top: dR*CS - CS/2 }}
+                transition={{ type:'spring', stiffness:320, damping:32 }}
                 className="absolute flex items-center justify-center pointer-events-none z-20"
-                style={{
-                  width: CELL_SIZE,
-                  height: CELL_SIZE,
-                }}
+                style={{ width:CS, height:CS }}
               >
                 <div
                   className={cn(
                     "relative rounded-full flex items-center justify-center font-bold",
-                    pieceThemes[pieceTheme],
-                    piece.color === 'red' ? "text-red-600 border-red-700" : "text-black border-gray-800",
-                    isSelected && "ring-4 ring-blue-400"
+                    pieceStyle[pieceTheme],
+                    isSel && "ring-[3px] ring-blue-400 ring-offset-0"
                   )}
-                  style={{ 
-                    fontFamily: '"Kaiti", "STKaiti", serif',
-                    width: CELL_SIZE * 0.85,
-                    height: CELL_SIZE * 0.85,
-                    fontSize: CELL_SIZE * 0.45,
-                    borderWidth: CELL_SIZE > 40 ? 2 : 1
+                  style={{
+                    width: pieceSize, height: pieceSize,
+                    background: pieceBg[pieceTheme],
+                    borderColor: isRed ? '#9b1111' : '#222',
+                    borderWidth: CS > 38 ? 2 : 1,
+                    color: isRed ? '#9b1111' : '#111',
+                    fontSize: CS * 0.44,
+                    fontFamily: '"STKaiti","KaiTi","Kaiti SC",serif',
                   }}
                 >
                   {PIECE_CHARS[`${piece.color}-${piece.type}`]}
+                  {piece.isArmored && (
+                    <span className="absolute bottom-0 right-0 text-[8px] bg-yellow-500 text-black rounded-full w-3 h-3 flex items-center justify-center leading-none">甲</span>
+                  )}
+                  {piece.isDrifting && (
+                    <span className="absolute bottom-0 right-0 text-[8px] bg-blue-500 text-white rounded-full w-3 h-3 flex items-center justify-center leading-none">飘</span>
+                  )}
                 </div>
               </motion.div>
             );

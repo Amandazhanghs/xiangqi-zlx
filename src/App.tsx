@@ -3,7 +3,7 @@ import { Board, BoardTheme, PieceTheme } from './components/Board';
 import { Xiangqi, Move, Piece } from './game/xiangqi';
 // @ts-ignore
 import AiWorker from './game/aiWorker?worker';
-import { Users, Cpu, ArrowLeft, Settings, Edit3, RotateCcw, Play, Eraser, Trash2, RefreshCw } from 'lucide-react';
+import { Users, Cpu, ArrowLeft, Settings, Edit3, RotateCcw, Eraser, Trash2, RefreshCw } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { playMoveSound, playCaptureSound, playCheckSound } from './utils/sounds';
@@ -295,6 +295,14 @@ export default function App() {
     setActiveCheat('none');
   };
 
+  const restartGame = () => {
+    if (mode === 'ai') {
+      startAI(playerColor as 'red' | 'black');
+    } else if (mode === 'local') {
+      startLocal();
+    }
+  };
+
   const startEdit = () => {
     setMode('edit');
     setPlayerColor('both');
@@ -484,29 +492,24 @@ export default function App() {
                 </div>
               </div>
 
-              {/* AI Thinking Progress */}
-              {isThinking && (
-                <div className="flex flex-col gap-2 py-2 border-b border-[#e5e5df]">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-[#1a1a1a]">电脑思考中...</span>
-                    <span className="text-sm font-bold text-[#5A5A40]">{aiProgress}%</span>
-                  </div>
-                  <div className="w-full bg-[#e5e5df] rounded-full h-2 overflow-hidden">
-                    <div 
-                      className="bg-[#5A5A40] h-2 rounded-full transition-all duration-300 ease-out"
-                      style={{ width: `${aiProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              
-              <button
-                onClick={handleUndo}
-                disabled={(mode === 'edit' ? editHistory.length === 0 : game.history.length === 0) || isThinking}
-                className="w-full flex items-center justify-center gap-2 py-3 bg-[#f5f5f0] hover:bg-[#e5e5df] disabled:opacity-50 disabled:cursor-not-allowed text-[#4a4a4a] rounded-full font-medium transition-colors"
-              >
-                <RotateCcw className="w-4 h-4" /> 悔棋
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleUndo}
+                  disabled={(mode === 'edit' ? editHistory.length === 0 : game.history.length === 0) || isThinking}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#f5f5f0] hover:bg-[#e5e5df] disabled:opacity-50 disabled:cursor-not-allowed text-[#4a4a4a] rounded-full font-medium transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" /> 悔棋
+                </button>
+                {mode !== 'edit' && (
+                  <button
+                    onClick={restartGame}
+                    disabled={isThinking}
+                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#f5f5f0] hover:bg-[#e5e5df] disabled:opacity-50 disabled:cursor-not-allowed text-[#4a4a4a] rounded-full font-medium transition-colors"
+                  >
+                    <RefreshCw className="w-4 h-4" /> 重新开始
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Cheat Mode Panel */}
@@ -582,14 +585,29 @@ export default function App() {
           {/* Right Panel - Board */}
           <div className="relative flex flex-col items-center">
             {mode !== 'edit' && (
-              <div className="flex items-center justify-between w-full max-w-md px-6 py-3 bg-white rounded-full shadow-sm border border-[#e5e5df] mb-6">
-                <div className="flex items-center gap-2">
-                  <div className={cn("w-3 h-3 rounded-full", playerColor === 'red' ? 'bg-[#8B0000]' : 'bg-[#2c2c2c]')} />
-                  <span className="font-medium text-lg">{playerColor === 'red' ? '红方' : '黑方'}</span>
+              <div className="flex flex-col w-full max-w-md mb-6 bg-white rounded-[24px] shadow-sm border border-[#e5e5df] overflow-hidden">
+                <div className="flex items-center justify-between px-6 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className={cn("w-3 h-3 rounded-full", playerColor === 'red' ? 'bg-[#8B0000]' : 'bg-[#2c2c2c]')} />
+                    <span className="font-medium text-lg">{playerColor === 'red' ? '红方' : '黑方'}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {isThinking && (
+                      <span className="text-sm font-medium text-[#5A5A40]">电脑思考中… {aiProgress}%</span>
+                    )}
+                    <div className="text-sm text-[#666] italic">
+                      {mode === 'ai' ? '（电脑）' : '（玩家 2）'}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-sm text-[#666] italic">
-                  {mode === 'ai' ? '(电脑)' : '(玩家 2)'}
-                </div>
+                {isThinking && (
+                  <div className="w-full bg-[#e5e5df] h-1.5">
+                    <div
+                      className="bg-[#5A5A40] h-1.5 transition-all duration-300 ease-out"
+                      style={{ width: `${aiProgress}%` }}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -638,11 +656,11 @@ export default function App() {
                 onChange={e => setAiDifficulty(Number(e.target.value))}
                 className="w-full border border-[#d5d5cf] rounded-xl px-4 py-3 bg-[#f5f5f0] focus:outline-none focus:border-[#5A5A40]"
               >
-                <option value={1}>普通 (Normal)</option>
-                <option value={2}>村冠 (Village Champion)</option>
-                <option value={3}>镇冠 (Town Champion)</option>
-                <option value={4}>县冠 (County Champion)</option>
-                <option value={5}>大师 (Master)</option>
+                <option value={1}>普通</option>
+                <option value={2}>村冠</option>
+                <option value={3}>镇冠</option>
+                <option value={4}>县冠</option>
+                <option value={5}>大师</option>
               </select>
             </div>
 

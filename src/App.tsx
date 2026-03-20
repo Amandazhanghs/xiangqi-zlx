@@ -10,12 +10,13 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { playMoveSound, playCaptureSound, playCheckSound, unlockAudio } from './utils/sounds';
+import { playMoveSound, playCaptureSound, playCheckSound } from './utils/sounds';
 
 function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
 }
 
+// 'setup' = post-edit game configuration screen
 type GameMode = 'menu' | 'ai' | 'local' | 'edit' | 'setup' | 'custom';
 
 interface CustomGameConfig {
@@ -46,6 +47,7 @@ export default function App() {
   const [hintMove, setHintMove] = useState<Move | null>(null);
   const [isHinting, setIsHinting] = useState(false);
 
+  // Setup screen state (saved when user clicks "开始对局" in edit)
   const [setupGame, setSetupGame] = useState<Xiangqi | null>(null);
   const [customConfig, setCustomConfig] = useState<CustomGameConfig>({
     redPlayer: 'human',
@@ -56,6 +58,9 @@ export default function App() {
   const workerRef = useRef<Worker | null>(null);
   const hintWorkerRef = useRef<Worker | null>(null);
 
+  // ── Kill & recreate workers ─────────────────────────────────────
+  // Must be called whenever the user navigates away while AI is thinking,
+  // so the old worker cannot fire stale results into a new game.
   const resetWorkers = () => {
     workerRef.current?.terminate();
     hintWorkerRef.current?.terminate();
@@ -280,6 +285,7 @@ export default function App() {
     setIsCheatModeUnlocked(false); setActiveCheat('none'); setDrawerOpen(false);
   };
 
+  // Edit done → go to setup screen
   const finishEdit = () => {
     setSetupGame(game.clone());
     setCustomConfig({ redPlayer: 'human', blackPlayer: 'ai', firstMove: 'red' });
@@ -307,6 +313,7 @@ export default function App() {
     ? !aiColors.has(game.turn as 'red'|'black')
     : (mode === 'local' || game.turn === playerColor);
 
+  const isEditMode = mode === 'edit';
   const SERIF: React.CSSProperties = { fontFamily: "'Noto Serif SC', 'STKaiti', 'KaiTi', serif" };
 
   // ═══════════════════════════════════════════
@@ -371,6 +378,8 @@ export default function App() {
             <div className="text-blue-200 text-sm">配置打谱局面的对弈方式</div>
           </div>
           <div className="p-5 space-y-4">
+
+            {/* First move */}
             <div className="rounded-2xl border border-gray-200 overflow-hidden">
               <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-200">
                 <span className="font-bold text-gray-700 text-sm">先手方（谁先走棋）</span>
@@ -378,16 +387,22 @@ export default function App() {
               <div className="p-3 grid grid-cols-2 gap-2">
                 <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'red'}))}
                   className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
-                    customConfig.firstMove==='red' ? 'border-red-600 bg-red-600 text-white shadow' : 'border-red-200 bg-red-50 text-red-600')}>
+                    customConfig.firstMove==='red'
+                      ? 'border-red-600 bg-red-600 text-white shadow'
+                      : 'border-red-200 bg-red-50 text-red-600')}>
                   🔴 红方先走
                 </button>
                 <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'black'}))}
                   className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
-                    customConfig.firstMove==='black' ? 'border-gray-800 bg-gray-800 text-white shadow' : 'border-gray-300 bg-gray-50 text-gray-700')}>
+                    customConfig.firstMove==='black'
+                      ? 'border-gray-800 bg-gray-800 text-white shadow'
+                      : 'border-gray-300 bg-gray-50 text-gray-700')}>
                   ⚫ 黑方先走
                 </button>
               </div>
             </div>
+
+            {/* Red player */}
             <div className="rounded-2xl border border-red-200 overflow-hidden">
               <div className="bg-red-50 px-4 py-2.5 border-b border-red-200 flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full bg-red-600 shrink-0"/>
@@ -397,12 +412,16 @@ export default function App() {
                 {(['human','ai'] as const).map(v => (
                   <button key={v} onClick={()=>setCustomConfig(p=>({...p,redPlayer:v}))}
                     className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
-                      customConfig.redPlayer===v ? 'border-red-600 bg-red-600 text-white shadow' : 'border-red-200 bg-white text-red-600 hover:bg-red-50')}>
+                      customConfig.redPlayer===v
+                        ? 'border-red-600 bg-red-600 text-white shadow'
+                        : 'border-red-200 bg-white text-red-600 hover:bg-red-50')}>
                     {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
                   </button>
                 ))}
               </div>
             </div>
+
+            {/* Black player */}
             <div className="rounded-2xl border border-gray-300 overflow-hidden">
               <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-300 flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full bg-gray-800 shrink-0"/>
@@ -412,18 +431,23 @@ export default function App() {
                 {(['human','ai'] as const).map(v => (
                   <button key={v} onClick={()=>setCustomConfig(p=>({...p,blackPlayer:v}))}
                     className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
-                      customConfig.blackPlayer===v ? 'border-gray-700 bg-gray-700 text-white shadow' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50')}>
+                      customConfig.blackPlayer===v
+                        ? 'border-gray-700 bg-gray-700 text-white shadow'
+                        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50')}>
                     {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
                   </button>
                 ))}
               </div>
             </div>
+
+            {/* Summary */}
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">
               <span className="font-bold">对局预览：</span>
               {customConfig.firstMove==='red'?'红':'黑'}方先走 ·
               红={customConfig.redPlayer==='ai'?'电脑':'人类'} ·
               黑={customConfig.blackPlayer==='ai'?'电脑':'人类'}
             </div>
+
             <div className="flex gap-3 pt-1">
               <button onClick={startEdit}
                 className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border border-gray-200 active:scale-95 transition-all">
@@ -440,156 +464,8 @@ export default function App() {
     );
   }
 
-  // ═══════════════════════════════════════════════════════
-  // EDIT MODE — piece panel above board, action bar below
-  // Mirrors the layout in the reference screenshot:
-  //   [TopBar]
-  //   [BlackPiecesRow]   ← above board
-  //   [RedPiecesRow]     ← above board
-  //   [Board]            ← flex-1
-  //   [ToolRow: eraser · reset · clear]
-  //   [ActionRow: undo · start game]
-  // ═══════════════════════════════════════════════════════
-  if (mode === 'edit') {
-    const ep = editPiece !== 'eraser' ? editPiece as Piece | null : null;
-    // piece panel = 2 rows × 44px + padding ≈ 104px extra reserved
-    const EDIT_EXTRA_V = 104;
-    return (
-      <div className="h-screen max-h-screen flex flex-col bg-amber-50 overflow-hidden" style={SERIF}>
-
-        {/* TOP BAR */}
-        <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-amber-200 shadow-sm shrink-0">
-          <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
-            className="flex items-center gap-1.5 text-gray-600 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all">
-            <ArrowLeft className="w-4 h-4" />
-            <span className="text-sm font-medium">返回</span>
-          </button>
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full border bg-blue-50 border-blue-300">
-            <Edit3 className="w-3.5 h-3.5 text-blue-600" />
-            <span className="text-sm font-bold text-blue-700">打谱编辑中</span>
-          </div>
-          <button onClick={()=>setShowSettings(true)}
-            className="p-2 text-gray-500 rounded-xl bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all">
-            <Settings className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* ── PIECE SELECTOR PANEL (above board, like reference image) ── */}
-        <div className="bg-gray-800 shrink-0 px-3 py-2 space-y-1.5">
-          {/* Black pieces */}
-          <div className="flex items-center gap-2">
-            <span className="text-gray-300 text-xs font-bold w-4 shrink-0">黑</span>
-            <div className="flex gap-1 flex-1">
-              {(['k','a','e','h','r','c','p'] as const).map(type => {
-                const sel = ep?.type===type && ep?.color==='black';
-                return (
-                  <button key={type} onClick={()=>setEditPiece({id:`${type}_black`,type,color:'black'})}
-                    className={cn(
-                      "flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all active:scale-95",
-                      sel ? "border-white bg-white text-gray-900 shadow-lg scale-105"
-                          : "border-gray-500 bg-gray-700 text-gray-200 hover:bg-gray-600"
-                    )}>
-                    {type==='k'?'将':type==='a'?'士':type==='e'?'象':type==='h'?'马':type==='r'?'车':type==='c'?'炮':'卒'}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          {/* Red pieces */}
-          <div className="flex items-center gap-2">
-            <span className="text-red-300 text-xs font-bold w-4 shrink-0">红</span>
-            <div className="flex gap-1 flex-1">
-              {(['k','a','e','h','r','c','p'] as const).map(type => {
-                const sel = ep?.type===type && ep?.color==='red';
-                return (
-                  <button key={type} onClick={()=>setEditPiece({id:`${type}_red`,type,color:'red'})}
-                    className={cn(
-                      "flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all active:scale-95",
-                      sel ? "border-yellow-300 bg-red-600 text-yellow-200 shadow-lg scale-105"
-                          : "border-red-500 bg-gray-700 text-red-300 hover:bg-gray-600"
-                    )}>
-                    {type==='k'?'帅':type==='a'?'仕':type==='e'?'相':type==='h'?'马':type==='r'?'车':type==='c'?'炮':'兵'}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* BOARD — takes remaining vertical space, Board sizes itself to fit */}
-        <div className="flex-1 flex items-center justify-center py-1 px-2 min-h-0"
-          onTouchStart={unlockAudio}>
-          <Board
-            game={game}
-            playerColor="both"
-            onMove={handleMove}
-            boardTheme={boardTheme}
-            pieceTheme={pieceTheme}
-            isEditMode={true}
-            onEditClick={handleEditClick}
-            hintMove={null}
-            extraReservedV={EDIT_EXTRA_V}
-          />
-        </div>
-
-        {/* ── BOTTOM ACTION AREA — always fully visible ── */}
-        <div className="bg-white border-t border-amber-200 shadow-sm shrink-0">
-
-          {/* Tool row: eraser, reset, clear */}
-          <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
-            <button onClick={()=>setEditPiece('eraser')}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold border-2 transition-all active:scale-95",
-                editPiece==='eraser'
-                  ? "border-orange-400 bg-orange-100 text-orange-700 shadow"
-                  : "border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100"
-              )}>
-              <Eraser className="w-3.5 h-3.5"/>橡皮擦
-            </button>
-            <button
-              onClick={()=>{ setEditHistory(p=>[...p,game]); setGame(new Xiangqi()); }}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all">
-              <RefreshCw className="w-3.5 h-3.5"/>初始局面
-            </button>
-            <button
-              onClick={()=>{
-                const g = game.clone();
-                setEditHistory(p=>[...p,game]);
-                g.clearBoard();
-                g.setPiece(9,4,{id:'k_red',type:'k',color:'red'});
-                g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});
-                setGame(g);
-              }}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all">
-              <Trash2 className="w-3.5 h-3.5"/>清空棋盘
-            </button>
-          </div>
-
-          {/* Main action row: undo + start game */}
-          <div className="flex items-stretch gap-2 px-3 pt-1 pb-3">
-            <button
-              onClick={handleUndo}
-              disabled={editHistory.length === 0}
-              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
-              <RotateCcw className="w-4 h-4" />
-              撤销
-            </button>
-            <button
-              onClick={finishEdit}
-              className="flex-[2] flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold active:scale-95 transition-all shadow">
-              <CheckCheck className="w-4 h-4" />
-              开始对局
-            </button>
-          </div>
-        </div>
-
-        {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
-      </div>
-    );
-  }
-
   // ═══════════════════════════════════════════
-  // GAME SCREEN (ai / local / custom)
+  // GAME SCREEN
   // ═══════════════════════════════════════════
   const turnColor = game.turn;
 
@@ -598,19 +474,27 @@ export default function App() {
 
       {/* TOP BAR */}
       <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-amber-200 shadow-sm shrink-0">
+        {/* Back button — resets workers before returning to menu */}
         <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
           className="flex items-center gap-1.5 text-gray-600 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all">
           <ArrowLeft className="w-4 h-4" />
           <span className="text-sm font-medium">返回</span>
         </button>
-        <div className="flex items-center gap-2 px-4 py-2 rounded-full border bg-amber-100 border-amber-300">
-          <div className={cn("w-3 h-3 rounded-full shrink-0 shadow-sm",
-            turnColor==='red' ? 'bg-red-600' : 'bg-gray-800',
-            isThinking && 'animate-pulse')} />
-          <span className="text-sm font-bold text-amber-900">
-            {isThinking ? `思考中 ${aiProgress}%` : (turnColor==='red'?'红方走棋':'黑方走棋')}
+
+        <div className={cn("flex items-center gap-2 px-4 py-2 rounded-full border",
+          isEditMode ? "bg-blue-50 border-blue-300" : "bg-amber-100 border-amber-300")}>
+          {isEditMode ? (
+            <Edit3 className="w-3.5 h-3.5 text-blue-600" />
+          ) : (
+            <div className={cn("w-3 h-3 rounded-full shrink-0 shadow-sm",
+              turnColor==='red' ? 'bg-red-600' : 'bg-gray-800',
+              isThinking && 'animate-pulse')} />
+          )}
+          <span className={cn("text-sm font-bold", isEditMode ? "text-blue-700" : "text-amber-900")}>
+            {isEditMode ? '打谱编辑中' : isThinking ? `思考中 ${aiProgress}%` : (turnColor==='red'?'红方走棋':'黑方走棋')}
           </span>
         </div>
+
         <button onClick={()=>setShowSettings(true)}
           className="p-2 text-gray-500 rounded-xl bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all">
           <Settings className="w-5 h-5" />
@@ -624,30 +508,31 @@ export default function App() {
       </div>
 
       {/* OPPONENT STRIP */}
-      <div className="flex items-center justify-between px-4 py-1.5 bg-white border-b border-amber-100 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-gray-800 shadow-sm" />
-          <span className="text-sm font-medium text-gray-600">黑方：{getPlayerLabel('black')}</span>
+      {!isEditMode && (
+        <div className="flex items-center justify-between px-4 py-1.5 bg-white border-b border-amber-100 shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-gray-800 shadow-sm" />
+            <span className="text-sm font-medium text-gray-600">黑方：{getPlayerLabel('black')}</span>
+          </div>
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{game.history.length} 步</span>
         </div>
-        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{game.history.length} 步</span>
-      </div>
+      )}
 
-      {/* BOARD — onTouchStart unlocks AudioContext on iOS (must be in a sync gesture) */}
-      <div className="flex-1 flex items-center justify-center py-1 px-2 min-h-0"
-        onTouchStart={unlockAudio}>
+      {/* BOARD */}
+      <div className="flex-1 flex items-center justify-center py-1 px-2 min-h-0">
         <div className="relative flex items-center justify-center w-full h-full">
           <Board
             game={game}
-            playerColor={boardPlayerColor()}
+            playerColor={isEditMode ? 'both' : boardPlayerColor()}
             onMove={handleMove}
             boardTheme={boardTheme}
             pieceTheme={pieceTheme}
-            isEditMode={false}
+            isEditMode={isEditMode}
             onEditClick={handleEditClick}
             onSquareClickOverride={activeCheat!=='none'?handleCheatAction:undefined}
             hintMove={hintMove}
           />
-          {gameOver && (
+          {gameOver && !isEditMode && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center rounded z-50">
               <div className="bg-white border border-amber-200 rounded-3xl p-6 mx-6 text-center w-full max-w-xs shadow-2xl">
                 <div className="text-4xl font-bold text-red-700 mb-2">{gameOver}</div>
@@ -665,34 +550,43 @@ export default function App() {
       </div>
 
       {/* MY STRIP */}
-      <div className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-amber-100 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-red-600 shadow-sm" />
-          <span className="text-sm font-bold text-red-700">红方：{getPlayerLabel('red')}</span>
+      {!isEditMode && (
+        <div className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-amber-100 shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-red-600 shadow-sm" />
+            <span className="text-sm font-bold text-red-700">红方：{getPlayerLabel('red')}</span>
+          </div>
+          <div className="flex gap-1.5">
+            {activeCheat !== 'none' && (
+              <span className="text-red-600 text-xs font-medium animate-pulse bg-red-50 px-2 py-0.5 rounded-full border border-red-200">点击棋盘目标格</span>
+            )}
+            {hintMove && !isHinting && (
+              <span className="text-green-600 text-xs font-medium bg-green-50 px-2 py-0.5 rounded-full border border-green-200">💡 已显示提示</span>
+            )}
+          </div>
         </div>
-        <div className="flex gap-1.5">
-          {activeCheat !== 'none' && (
-            <span className="text-red-600 text-xs font-medium animate-pulse bg-red-50 px-2 py-0.5 rounded-full border border-red-200">点击棋盘目标格</span>
-          )}
-          {hintMove && !isHinting && (
-            <span className="text-green-600 text-xs font-medium bg-green-50 px-2 py-0.5 rounded-full border border-green-200">💡 已显示提示</span>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* BOTTOM BAR */}
       <div className="bg-white border-t border-amber-200 shadow-sm shrink-0">
         <div className="flex items-stretch gap-2 px-3 py-2.5">
+
           <button onClick={handleUndo}
-            disabled={game.history.length===0 || isThinking}
+            disabled={(isEditMode ? editHistory.length===0 : game.history.length===0) || isThinking}
             className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
-            <RotateCcw className="w-4 h-4" />悔棋
+            <RotateCcw className="w-4 h-4" />
+            {isEditMode ? '撤销' : '悔棋'}
           </button>
-          <button onClick={restartGame} disabled={isThinking}
-            className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
-            <RefreshCw className="w-4 h-4" />重开
-          </button>
-          {humanTurn && !isThinking && (
+
+          {!isEditMode && (
+            <button onClick={restartGame} disabled={isThinking}
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
+              <RefreshCw className="w-4 h-4" />
+              重开
+            </button>
+          )}
+
+          {!isEditMode && humanTurn && !isThinking && (
             <button onClick={handleHint} disabled={isHinting || !!game.getWinner()}
               className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium active:scale-95 transition-all",
                 isHinting
@@ -702,35 +596,117 @@ export default function App() {
               {isHinting ? '分析中' : '提示'}
             </button>
           )}
+
+          {isEditMode && (
+            <button onClick={finishEdit}
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 border border-blue-600 text-white rounded-xl text-sm font-bold active:scale-95 transition-all shadow">
+              <CheckCheck className="w-4 h-4" />
+              开始对局
+            </button>
+          )}
+
           <button onClick={()=>setDrawerOpen(o=>!o)}
             className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium transition-all active:scale-95",
               drawerOpen ? "bg-amber-100 border-amber-400 text-amber-800" : "bg-gray-100 hover:bg-gray-200 border-gray-200 text-gray-700")}>
             {drawerOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-            秘籍
+            {isEditMode ? '编辑' : '秘籍'}
           </button>
         </div>
 
         {drawerOpen && (
           <div className="border-t border-amber-200 px-3 pt-3 pb-4 bg-amber-50 space-y-3">
-            <CheatDrawer
-              game={game}
-              playerColor={mode==='custom' ? game.turn as 'red'|'black' : playerColor as 'red'|'black'}
-              isCheatModeUnlocked={isCheatModeUnlocked}
-              cheatPassword={cheatPassword}
-              setCheatPassword={setCheatPassword}
-              activeCheat={activeCheat}
-              setActiveCheat={setActiveCheat}
-              revivePiece={revivePiece}
-              setRevivePiece={setRevivePiece}
-              onUnlock={handleCheatUnlock}
-              hintDifficulty={hintDifficulty}
-              setHintDifficulty={setHintDifficulty}
-            />
+            {isEditMode ? (
+              <EditDrawer
+                editPiece={editPiece}
+                setEditPiece={setEditPiece}
+                onReset={()=>{ setEditHistory(p=>[...p,game]); setGame(new Xiangqi()); }}
+                onClear={()=>{
+                  const g = game.clone();
+                  setEditHistory(p=>[...p,game]);
+                  g.clearBoard();
+                  g.setPiece(9,4,{id:'k_red',type:'k',color:'red'});
+                  g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});
+                  setGame(g);
+                }}
+              />
+            ) : (
+              <CheatDrawer
+                game={game}
+                playerColor={mode==='custom' ? game.turn as 'red'|'black' : playerColor as 'red'|'black'}
+                isCheatModeUnlocked={isCheatModeUnlocked}
+                cheatPassword={cheatPassword}
+                setCheatPassword={setCheatPassword}
+                activeCheat={activeCheat}
+                setActiveCheat={setActiveCheat}
+                revivePiece={revivePiece}
+                setRevivePiece={setRevivePiece}
+                onUnlock={handleCheatUnlock}
+                hintDifficulty={hintDifficulty}
+                setHintDifficulty={setHintDifficulty}
+              />
+            )}
           </div>
         )}
       </div>
 
       {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
+    </div>
+  );
+}
+
+// ── EditDrawer ────────────────────────────────────────────────────
+function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
+  editPiece: Piece | 'eraser' | null;
+  setEditPiece: (p: Piece | 'eraser' | null) => void;
+  onReset: () => void;
+  onClear: () => void;
+}) {
+  const ep = editPiece !== 'eraser' ? editPiece as Piece | null : null;
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <button onClick={onReset}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 active:scale-95 transition-all">
+          <RefreshCw className="w-3.5 h-3.5"/>初始局面
+        </button>
+        <button onClick={onClear}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 active:scale-95 transition-all">
+          <Trash2 className="w-3.5 h-3.5"/>清空棋盘
+        </button>
+      </div>
+      <div>
+        <div className="text-red-600 text-xs font-bold mb-2 pl-1">红方棋子</div>
+        <div className="flex gap-1.5">
+          {(['k','a','e','h','r','c','p'] as const).map(type=>(
+            <button key={`r-${type}`} onClick={()=>setEditPiece({id:`${type}_red`,type,color:'red'})}
+              className={cn("flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all",
+                editPiece!=='eraser' && ep?.type===type && ep?.color==='red'
+                  ?"border-red-700 bg-red-700 text-yellow-200 scale-110 shadow"
+                  :"border-red-200 bg-white text-red-700 hover:bg-red-50 active:scale-95")}>
+              {type==='k'?'帅':type==='a'?'仕':type==='e'?'相':type==='h'?'马':type==='r'?'车':type==='c'?'炮':'兵'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="text-gray-700 text-xs font-bold mb-2 pl-1">黑方棋子</div>
+        <div className="flex gap-1.5">
+          {(['k','a','e','h','r','c','p'] as const).map(type=>(
+            <button key={`b-${type}`} onClick={()=>setEditPiece({id:`${type}_black`,type,color:'black'})}
+              className={cn("flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all",
+                editPiece!=='eraser' && ep?.type===type && ep?.color==='black'
+                  ?"border-gray-800 bg-gray-800 text-white scale-110 shadow"
+                  :"border-gray-300 bg-white text-gray-800 hover:bg-gray-50 active:scale-95")}>
+              {type==='k'?'将':type==='a'?'士':type==='e'?'象':type==='h'?'马':type==='r'?'车':type==='c'?'炮':'卒'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <button onClick={()=>setEditPiece('eraser')}
+        className={cn("w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium border-2 transition-all active:scale-95",
+          editPiece==='eraser'?"border-orange-400 bg-orange-100 text-orange-700 shadow":"border-gray-200 bg-white text-gray-500 hover:bg-gray-50")}>
+        <Eraser className="w-4 h-4"/>橡皮擦
+      </button>
     </div>
   );
 }
@@ -758,7 +734,10 @@ function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, se
           <input type="password" value={cheatPassword} onChange={(e:any)=>setCheatPassword(e.target.value)}
             placeholder="输入秘籍密码"
             className="flex-1 bg-white border border-gray-300 text-gray-700 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-amber-400 placeholder:text-gray-300"/>
-          <button type="submit" className="px-5 bg-red-700 text-yellow-200 rounded-xl text-sm font-bold hover:bg-red-800 active:scale-95 transition-all">解锁</button>
+          <button type="submit"
+            className="px-5 bg-red-700 text-yellow-200 rounded-xl text-sm font-bold hover:bg-red-800 active:scale-95 transition-all">
+            解锁
+          </button>
         </form>
       ) : (
         <>
@@ -778,7 +757,9 @@ function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, se
               {game.capturedPieces.filter((p:any)=>p.color===playerColor).map((p:any,i:number)=>(
                 <button key={i} onClick={()=>{setRevivePiece(p);setActiveCheat('revive');}}
                   className={cn("w-9 h-9 rounded-full border-2 text-sm font-bold transition-all active:scale-95",
-                    activeCheat==='revive'&&revivePiece===p ? "bg-red-700 border-red-700 text-yellow-200 shadow" : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50")}>
+                    activeCheat==='revive'&&revivePiece===p
+                      ?"bg-red-700 border-red-700 text-yellow-200 shadow"
+                      :"bg-white border-gray-300 text-gray-700 hover:bg-gray-50")}>
                   {p.type==='r'?'车':p.type==='h'?'马':p.type==='c'?'炮':p.type==='e'?'相':p.type==='a'?'仕':'兵'}
                 </button>
               ))}

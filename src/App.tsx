@@ -6,7 +6,7 @@ import AiWorker from './game/aiWorker?worker';
 import {
   Users, Cpu, ArrowLeft, Settings, Edit3, RotateCcw,
   Eraser, Trash2, RefreshCw, ChevronDown, ChevronUp, X,
-  Lightbulb, Play
+  Lightbulb, Play, CheckCheck
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -16,8 +16,8 @@ function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
 }
 
-type GameMode = 'menu' | 'ai' | 'local' | 'edit' | 'custom';
-// custom = post-edit "start game" config screen
+// 'setup' = post-edit game configuration screen
+type GameMode = 'menu' | 'ai' | 'local' | 'edit' | 'setup' | 'custom';
 
 interface CustomGameConfig {
   redPlayer: 'human' | 'ai';
@@ -33,8 +33,7 @@ export default function App() {
   const [mode, setMode] = useState<GameMode>('menu');
   const [game, setGame] = useState(new Xiangqi());
   const [playerColor, setPlayerColor] = useState<'red' | 'black' | 'both'>('red');
-  // For custom mode: which colors are AI
-  const [aiColors, setAiColors] = useState<Set<'red' | 'black'>>(new Set(['black']));
+  const [aiColors, setAiColors] = useState<Set<'red' | 'black'>>(new Set());
   const [gameOver, setGameOver] = useState<string | null>(null);
 
   const [aiDifficulty, setAiDifficulty] = useState<number>(4);
@@ -48,13 +47,13 @@ export default function App() {
   const [hintMove, setHintMove] = useState<Move | null>(null);
   const [isHinting, setIsHinting] = useState(false);
 
-  // Custom game config (after edit mode)
+  // Setup screen state (saved when user clicks "开始对局" in edit)
+  const [setupGame, setSetupGame] = useState<Xiangqi | null>(null);
   const [customConfig, setCustomConfig] = useState<CustomGameConfig>({
     redPlayer: 'human',
     blackPlayer: 'ai',
     firstMove: 'red',
   });
-  const [editedGame, setEditedGame] = useState<Xiangqi | null>(null);
 
   const workerRef = useRef<Worker | null>(null);
   const hintWorkerRef = useRef<Worker | null>(null);
@@ -75,7 +74,6 @@ export default function App() {
   const [activeCheat, setActiveCheat] = useState<'none' | 'armor' | 'drift' | 'revive' | 'betray'>('none');
   const [revivePiece, setRevivePiece] = useState<Piece | null>(null);
 
-  // Determine if current turn is AI's turn
   const isAiTurn = (): boolean => {
     if (mode === 'ai') return game.turn !== playerColor;
     if (mode === 'custom') return aiColors.has(game.turn as 'red' | 'black');
@@ -83,22 +81,19 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (mode !== 'edit' && mode !== 'custom') {
+    if (mode !== 'edit' && mode !== 'setup') {
       const winner = game.getWinner();
       if (winner) setGameOver(winner === 'draw' ? '和棋！' : `${winner === 'red' ? '红方' : '黑方'} 胜！`);
     }
   }, [game, mode]);
 
-  // AI move trigger
   useEffect(() => {
     let isCancelled = false;
     const shouldAiMove = (mode === 'ai' || mode === 'custom') && isAiTurn() && !game.isGameOver();
-
     if (shouldAiMove) {
       setIsThinking(true);
       setAiProgress(0);
       setHintMove(null);
-
       if (workerRef.current) {
         workerRef.current.onmessage = (e) => {
           if (isCancelled) return;
@@ -132,13 +127,9 @@ export default function App() {
     if (isHinting || isThinking) return;
     setIsHinting(true);
     setHintMove(null);
-
     if (hintWorkerRef.current) {
       hintWorkerRef.current.onmessage = (e) => {
-        if (e.data.type === 'done') {
-          setHintMove(e.data.move);
-          setIsHinting(false);
-        }
+        if (e.data.type === 'done') { setHintMove(e.data.move); setIsHinting(false); }
       };
       hintWorkerRef.current.postMessage({
         board: game.board, turn: game.turn,
@@ -161,17 +152,17 @@ export default function App() {
   };
 
   const handleCheatAction = (r: number, c: number) => {
-    const currentPlayerColor = mode === 'custom' ? game.turn as 'red' | 'black' : playerColor as 'red' | 'black';
+    const cpColor = mode === 'custom' ? game.turn as 'red' | 'black' : playerColor as 'red' | 'black';
     const piece = game.getPiece(r, c);
     const newGame = game.clone();
     let valid = false;
-    if (activeCheat === 'armor' && piece && piece.color === currentPlayerColor && piece.type === 'p') {
+    if (activeCheat === 'armor' && piece && piece.color === cpColor && piece.type === 'p') {
       newGame.applyCheatArmor(r, c); valid = true;
-    } else if (activeCheat === 'drift' && piece && piece.color === currentPlayerColor && piece.type === 'r') {
+    } else if (activeCheat === 'drift' && piece && piece.color === cpColor && piece.type === 'r') {
       newGame.applyCheatDrift(r, c); valid = true;
     } else if (activeCheat === 'revive' && !piece && revivePiece) {
       newGame.applyCheatRevive(r, c, revivePiece); valid = true; setRevivePiece(null);
-    } else if (activeCheat === 'betray' && piece && piece.color !== currentPlayerColor && ['r','c','h','p'].includes(piece.type)) {
+    } else if (activeCheat === 'betray' && piece && piece.color !== cpColor && ['r','c','h','p'].includes(piece.type)) {
       newGame.applyCheatBetray(r, c); valid = true;
     }
     if (valid) { setGame(newGame); setActiveCheat('none'); }
@@ -222,7 +213,6 @@ export default function App() {
       if (mode === 'ai') { g.undo(); g.undo(); }
       else if (mode === 'local') { g.undo(); }
       else if (mode === 'custom') {
-        // Undo until it's a human's turn
         g.undo();
         if (aiColors.has(g.turn as 'red' | 'black')) g.undo();
       }
@@ -233,7 +223,7 @@ export default function App() {
   const startLocal = () => {
     setMode('local'); setPlayerColor('both'); setGame(new Xiangqi());
     setGameOver(null); setIsCheatModeUnlocked(false); setActiveCheat('none');
-    setDrawerOpen(false); setHintMove(null);
+    setDrawerOpen(false); setHintMove(null); setAiColors(new Set());
   };
 
   const startAI = (color: 'red'|'black') => {
@@ -246,15 +236,14 @@ export default function App() {
     setHintMove(null); setGameOver(null);
     if (mode === 'ai') startAI(playerColor as 'red'|'black');
     else if (mode === 'local') startLocal();
-    else if (mode === 'custom' && editedGame) {
-      startCustomGame(customConfig, editedGame);
-    }
+    else if (mode === 'custom' && setupGame) launchCustomGame(customConfig, setupGame);
   };
 
-  const startCustomGame = (config: CustomGameConfig, baseGame: Xiangqi) => {
-    const g = baseGame.clone();
+  const launchCustomGame = (config: CustomGameConfig, base: Xiangqi) => {
+    const g = base.clone();
     g.turn = config.firstMove;
     g.history = [];
+    g.capturedPieces = [];
     const colors = new Set<'red' | 'black'>();
     if (config.redPlayer === 'ai') colors.add('red');
     if (config.blackPlayer === 'ai') colors.add('black');
@@ -278,10 +267,11 @@ export default function App() {
     setIsCheatModeUnlocked(false); setActiveCheat('none'); setDrawerOpen(false); setHintMove(null);
   };
 
+  // Edit done → go to setup screen
   const finishEdit = () => {
-    setEditedGame(game.clone());
+    setSetupGame(game.clone());
     setCustomConfig({ redPlayer: 'human', blackPlayer: 'ai', firstMove: 'red' });
-    setMode('custom');
+    setMode('setup');
   };
 
   const handleCheatUnlock = (e: React.FormEvent) => {
@@ -290,63 +280,61 @@ export default function App() {
     else alert('密码错误！');
   };
 
-  // Determine board flip and who can move
   const boardPlayerColor = (): 'red' | 'black' | 'both' => {
-    if (mode === 'local') return 'both';
-    if (mode === 'custom') {
-      // If both are human, allow both. If one is human, show from that perspective.
-      const humanColors: ('red'|'black')[] = [];
-      if (!aiColors.has('red')) humanColors.push('red');
-      if (!aiColors.has('black')) humanColors.push('black');
-      if (humanColors.length === 2 || humanColors.length === 0) return 'both';
-      return humanColors[0];
-    }
+    if (mode === 'local' || mode === 'custom') return 'both';
     return playerColor as 'red' | 'black' | 'both';
   };
 
-  // ─── MENU ────────────────────────────────────────────────────────
+  const getPlayerLabel = (color: 'red'|'black') => {
+    if (mode === 'ai') return color === playerColor ? '我' : '电脑';
+    if (mode === 'custom') return aiColors.has(color) ? '电脑' : '玩家';
+    return color === 'red' ? '红方' : '黑方';
+  };
+
+  const humanTurn = mode === 'custom'
+    ? !aiColors.has(game.turn as 'red'|'black')
+    : (mode === 'local' || game.turn === playerColor);
+
+  const isEditMode = mode === 'edit';
+  const SERIF: React.CSSProperties = { fontFamily: "'Noto Serif SC', 'STKaiti', 'KaiTi', serif" };
+
+  // ═══════════════════════════════════════════
+  // MENU
+  // ═══════════════════════════════════════════
   if (mode === 'menu') {
     return (
-      <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center px-4 py-8"
-        style={{ fontFamily: "'Noto Serif SC', 'STKaiti', serif" }}>
+      <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center px-4 py-8" style={SERIF}>
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl border border-amber-200 overflow-hidden">
-          {/* Header */}
-          <div className="bg-gradient-to-b from-red-700 to-red-800 px-6 py-8 text-center">
+          <div className="bg-gradient-to-b from-red-700 to-red-900 px-6 py-8 text-center">
             <div className="text-5xl font-bold text-yellow-300 tracking-widest mb-1">中国象棋</div>
-            <div className="text-red-200 text-sm tracking-widest">千年智慧 · 方寸博弈</div>
+            <div className="text-red-200 text-sm tracking-widest mt-1">千年智慧 · 方寸博弈</div>
           </div>
-
           <div className="p-5 space-y-3">
-            {/* AI game */}
             <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Cpu className="w-4 h-4 text-red-600" />
                 <span className="text-red-700 font-bold text-sm">人机对战</span>
-                <span className="ml-auto text-xs text-red-400 bg-red-100 px-2 py-0.5 rounded-full">
-                  {DIFFICULTY_LABELS[aiDifficulty]}
-                </span>
+                <span className="ml-auto text-xs text-red-400 bg-red-100 px-2 py-0.5 rounded-full">{DIFFICULTY_LABELS[aiDifficulty]}</span>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={()=>startAI('red')}
-                  className="py-3 bg-red-700 hover:bg-red-800 text-yellow-200 rounded-xl font-bold text-base shadow active:scale-95 transition-transform">
+                  className="py-3.5 bg-red-700 hover:bg-red-800 text-yellow-200 rounded-xl font-bold text-base shadow active:scale-95 transition-transform">
                   执红先手
                 </button>
                 <button onClick={()=>startAI('black')}
-                  className="py-3 bg-gray-800 hover:bg-gray-900 text-white rounded-xl font-bold text-base shadow active:scale-95 transition-transform">
+                  className="py-3.5 bg-gray-800 hover:bg-gray-900 text-white rounded-xl font-bold text-base shadow active:scale-95 transition-transform">
                   执黑后手
                 </button>
               </div>
             </div>
-
-            {/* Other buttons */}
             {[
-              { icon:<Users className="w-5 h-5 text-green-600"/>, label:'双人对战', sub:'本地双人轮流操作', color:'bg-green-50 border-green-200', action:startLocal },
-              { icon:<Edit3 className="w-5 h-5 text-blue-600"/>, label:'打谱模式', sub:'摆局面 · 自由对弈', color:'bg-blue-50 border-blue-200', action:startEdit },
-              { icon:<Settings className="w-5 h-5 text-purple-600"/>, label:'设置', sub:'棋盘 · 棋子 · 难度', color:'bg-purple-50 border-purple-200', action:()=>setShowSettings(true) },
-            ].map(({icon,label,sub,color,action}) => (
+              { icon:<Users className="w-5 h-5 text-green-600"/>, label:'双人对战', sub:'本地双人轮流操作', bg:'bg-green-50 border-green-200', action:startLocal },
+              { icon:<Edit3 className="w-5 h-5 text-blue-600"/>, label:'打谱模式', sub:'摆局面 · 自由对弈', bg:'bg-blue-50 border-blue-200', action:startEdit },
+              { icon:<Settings className="w-5 h-5 text-purple-600"/>, label:'设置', sub:'棋盘 · 棋子 · 难度', bg:'bg-purple-50 border-purple-200', action:()=>setShowSettings(true) },
+            ].map(({icon,label,sub,bg,action}) => (
               <button key={label} onClick={action}
-                className={cn("w-full border rounded-2xl p-4 text-left flex items-center gap-4 active:scale-[0.98] transition-transform", color)}>
-                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm shrink-0">{icon}</div>
+                className={cn("w-full border rounded-2xl p-4 text-left flex items-center gap-4 active:scale-[0.98] transition-transform", bg)}>
+                <div className="w-11 h-11 bg-white rounded-xl flex items-center justify-center shadow-sm shrink-0">{icon}</div>
                 <div>
                   <div className="font-bold text-gray-800 text-base">{label}</div>
                   <div className="text-gray-500 text-xs mt-0.5">{sub}</div>
@@ -355,87 +343,101 @@ export default function App() {
             ))}
           </div>
         </div>
-
-        {showSettings && (
-          <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}}
-            onClose={()=>setShowSettings(false)} />
-        )}
+        {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
       </div>
     );
   }
 
-  // ─── CUSTOM GAME SETUP (after edit) ──────────────────────────────
-  if (mode === 'custom' && editedGame && !game.history.length && !aiColors.size && !(aiColors.size > 0)) {
-    // Actually we need a proper check: show setup only when entering from edit
-    // We'll handle this with a separate flag - editedGame !== null && mode === 'custom' with game not yet started
-  }
-
-  // ─── EDIT MODE: custom game setup overlay ─────────────────────────
-  // Show this when mode was just set to 'custom' from finishEdit
-  const showCustomSetup = mode === 'custom' && editedGame !== null && game === editedGame;
-
-  if (showCustomSetup) {
+  // ═══════════════════════════════════════════
+  // SETUP SCREEN
+  // ═══════════════════════════════════════════
+  if (mode === 'setup') {
     return (
-      <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center px-4 py-8"
-        style={{ fontFamily: "'Noto Serif SC', 'STKaiti', serif" }}>
+      <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center px-4 py-8" style={SERIF}>
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl border border-amber-200 overflow-hidden">
-          <div className="bg-gradient-to-b from-blue-700 to-blue-800 px-6 py-6 text-center">
+          <div className="bg-gradient-to-b from-blue-700 to-blue-900 px-6 py-6 text-center">
             <div className="text-2xl font-bold text-white mb-1">对局设置</div>
             <div className="text-blue-200 text-sm">配置打谱局面的对弈方式</div>
           </div>
           <div className="p-5 space-y-4">
+
             {/* First move */}
-            <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4">
-              <div className="font-bold text-gray-700 mb-3">先手方</div>
-              <div className="grid grid-cols-2 gap-2">
-                {(['red','black'] as const).map(c => (
-                  <button key={c} onClick={()=>setCustomConfig(p=>({...p,firstMove:c}))}
-                    className={cn("py-3 rounded-xl font-bold text-sm transition-all",
-                      customConfig.firstMove === c
-                        ? (c==='red' ? 'bg-red-700 text-yellow-200 shadow' : 'bg-gray-800 text-white shadow')
-                        : 'bg-gray-100 text-gray-600')}>
-                    {c==='red' ? '🔴 红方先走' : '⚫ 黑方先走'}
-                  </button>
-                ))}
+            <div className="rounded-2xl border border-gray-200 overflow-hidden">
+              <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-200">
+                <span className="font-bold text-gray-700 text-sm">先手方（谁先走棋）</span>
+              </div>
+              <div className="p-3 grid grid-cols-2 gap-2">
+                <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'red'}))}
+                  className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
+                    customConfig.firstMove==='red'
+                      ? 'border-red-600 bg-red-600 text-white shadow'
+                      : 'border-red-200 bg-red-50 text-red-600')}>
+                  🔴 红方先走
+                </button>
+                <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'black'}))}
+                  className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
+                    customConfig.firstMove==='black'
+                      ? 'border-gray-800 bg-gray-800 text-white shadow'
+                      : 'border-gray-300 bg-gray-50 text-gray-700')}>
+                  ⚫ 黑方先走
+                </button>
               </div>
             </div>
 
             {/* Red player */}
-            <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
-              <div className="font-bold text-red-700 mb-3">红方由谁执棋</div>
-              <div className="grid grid-cols-2 gap-2">
-                {([['human','👤 人类'],['ai','🤖 电脑']] as const).map(([v,label]) => (
+            <div className="rounded-2xl border border-red-200 overflow-hidden">
+              <div className="bg-red-50 px-4 py-2.5 border-b border-red-200 flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-red-600 shrink-0"/>
+                <span className="font-bold text-red-700 text-sm">红方由谁执棋</span>
+              </div>
+              <div className="p-3 grid grid-cols-2 gap-2">
+                {(['human','ai'] as const).map(v => (
                   <button key={v} onClick={()=>setCustomConfig(p=>({...p,redPlayer:v}))}
-                    className={cn("py-3 rounded-xl font-bold text-sm transition-all",
-                      customConfig.redPlayer === v ? 'bg-red-700 text-yellow-200 shadow' : 'bg-white border border-red-200 text-red-700')}>
-                    {label}
+                    className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
+                      customConfig.redPlayer===v
+                        ? 'border-red-600 bg-red-600 text-white shadow'
+                        : 'border-red-200 bg-white text-red-600 hover:bg-red-50')}>
+                    {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Black player */}
-            <div className="bg-gray-50 border border-gray-300 rounded-2xl p-4">
-              <div className="font-bold text-gray-700 mb-3">黑方由谁执棋</div>
-              <div className="grid grid-cols-2 gap-2">
-                {([['human','👤 人类'],['ai','🤖 电脑']] as const).map(([v,label]) => (
+            <div className="rounded-2xl border border-gray-300 overflow-hidden">
+              <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-300 flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-gray-800 shrink-0"/>
+                <span className="font-bold text-gray-700 text-sm">黑方由谁执棋</span>
+              </div>
+              <div className="p-3 grid grid-cols-2 gap-2">
+                {(['human','ai'] as const).map(v => (
                   <button key={v} onClick={()=>setCustomConfig(p=>({...p,blackPlayer:v}))}
-                    className={cn("py-3 rounded-xl font-bold text-sm transition-all",
-                      customConfig.blackPlayer === v ? 'bg-gray-800 text-white shadow' : 'bg-white border border-gray-300 text-gray-700')}>
-                    {label}
+                    className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
+                      customConfig.blackPlayer===v
+                        ? 'border-gray-700 bg-gray-700 text-white shadow'
+                        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50')}>
+                    {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="flex gap-2 pt-1">
+            {/* Summary */}
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">
+              <span className="font-bold">对局预览：</span>
+              {customConfig.firstMove==='red'?'红':'黑'}方先走 ·
+              红={customConfig.redPlayer==='ai'?'电脑':'人类'} ·
+              黑={customConfig.blackPlayer==='ai'?'电脑':'人类'}
+            </div>
+
+            <div className="flex gap-3 pt-1">
               <button onClick={startEdit}
-                className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2">
+                className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border border-gray-200 active:scale-95 transition-all">
                 <ArrowLeft className="w-4 h-4"/>返回编辑
               </button>
-              <button onClick={()=>startCustomGame(customConfig, editedGame!)}
-                className="flex-1 py-3 bg-blue-700 hover:bg-blue-800 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow">
-                <Play className="w-4 h-4"/>开始对弈
+              <button onClick={()=>setupGame && launchCustomGame(customConfig, setupGame)}
+                className="flex-1 py-3.5 bg-blue-700 hover:bg-blue-800 text-white rounded-xl font-bold text-base flex items-center justify-center gap-2 shadow active:scale-95 transition-all">
+                <Play className="w-4 h-4"/>开始对局
               </button>
             </div>
           </div>
@@ -444,24 +446,13 @@ export default function App() {
     );
   }
 
-  // ─── GAME SCREEN ─────────────────────────────────────────────────
+  // ═══════════════════════════════════════════
+  // GAME SCREEN
+  // ═══════════════════════════════════════════
   const turnColor = game.turn;
-  const currentBoardPlayerColor = boardPlayerColor();
-
-  const humanTurn = mode === 'custom'
-    ? !aiColors.has(game.turn as 'red'|'black')
-    : (mode === 'local' || game.turn === playerColor);
-
-  // Labels
-  const getPlayerLabel = (color: 'red'|'black') => {
-    if (mode === 'ai') return color === playerColor ? '我' : '电脑';
-    if (mode === 'custom') return aiColors.has(color) ? '电脑' : '玩家';
-    return color === 'red' ? '红方' : '黑方';
-  };
 
   return (
-    <div className="h-screen max-h-screen flex flex-col bg-amber-50 overflow-hidden"
-      style={{ fontFamily: "'Noto Serif SC', 'STKaiti', serif" }}>
+    <div className="h-screen max-h-screen flex flex-col bg-amber-50 overflow-hidden" style={SERIF}>
 
       {/* TOP BAR */}
       <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-amber-200 shadow-sm shrink-0">
@@ -471,13 +462,17 @@ export default function App() {
           <span className="text-sm font-medium">返回</span>
         </button>
 
-        <div className="flex items-center gap-2 bg-amber-100 px-4 py-2 rounded-full border border-amber-300">
-          <div className={cn("w-3 h-3 rounded-full shrink-0 shadow-sm",
-            turnColor==='red' ? 'bg-red-600' : 'bg-gray-800',
-            isThinking && 'animate-pulse'
-          )} />
-          <span className="text-sm font-bold text-amber-900">
-            {isThinking ? `思考中 ${aiProgress}%` : (turnColor==='red'?'红方走棋':'黑方走棋')}
+        <div className={cn("flex items-center gap-2 px-4 py-2 rounded-full border",
+          isEditMode ? "bg-blue-50 border-blue-300" : "bg-amber-100 border-amber-300")}>
+          {isEditMode ? (
+            <Edit3 className="w-3.5 h-3.5 text-blue-600" />
+          ) : (
+            <div className={cn("w-3 h-3 rounded-full shrink-0 shadow-sm",
+              turnColor==='red' ? 'bg-red-600' : 'bg-gray-800',
+              isThinking && 'animate-pulse')} />
+          )}
+          <span className={cn("text-sm font-bold", isEditMode ? "text-blue-700" : "text-amber-900")}>
+            {isEditMode ? '打谱编辑中' : isThinking ? `思考中 ${aiProgress}%` : (turnColor==='red'?'红方走棋':'黑方走棋')}
           </span>
         </div>
 
@@ -489,53 +484,45 @@ export default function App() {
 
       {/* PROGRESS BAR */}
       <div className="h-1 bg-amber-100 shrink-0">
-        <div className="h-full bg-red-500 transition-all duration-300 ease-out"
+        <div className="h-full bg-red-500 transition-all duration-300"
           style={{ width: isThinking ? `${aiProgress}%` : '0%' }} />
       </div>
 
       {/* OPPONENT STRIP */}
-      <div className="flex items-center justify-between px-4 py-1.5 bg-white border-b border-amber-100 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className={cn("w-3 h-3 rounded-full shadow-sm",
-            (mode==='ai'&&playerColor==='red')||
-            (mode==='custom'&&!aiColors.has('black')) ? 'bg-gray-800' : 'bg-gray-800'
-          )} />
-          <span className="text-sm font-medium text-gray-600">
-            黑方：{getPlayerLabel('black')}
-            {mode==='local' && <span className="text-xs text-gray-400 ml-1">（双人模式）</span>}
-          </span>
+      {!isEditMode && (
+        <div className="flex items-center justify-between px-4 py-1.5 bg-white border-b border-amber-100 shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-gray-800 shadow-sm" />
+            <span className="text-sm font-medium text-gray-600">黑方：{getPlayerLabel('black')}</span>
+          </div>
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{game.history.length} 步</span>
         </div>
-        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{game.history.length} 步</span>
-      </div>
+      )}
 
-      {/* BOARD AREA */}
-      <div className="flex-1 flex items-center justify-center py-1 px-1 min-h-0">
-        <div className="relative w-full h-full flex items-center justify-center">
+      {/* BOARD — flex-1 fills remaining height */}
+      <div className="flex-1 flex items-center justify-center py-1 px-2 min-h-0">
+        <div className="relative flex items-center justify-center w-full h-full">
           <Board
             game={game}
-            playerColor={currentBoardPlayerColor}
+            playerColor={isEditMode ? 'both' : boardPlayerColor()}
             onMove={handleMove}
             boardTheme={boardTheme}
             pieceTheme={pieceTheme}
-            isEditMode={mode==='edit'}
+            isEditMode={isEditMode}
             onEditClick={handleEditClick}
             onSquareClickOverride={activeCheat!=='none'?handleCheatAction:undefined}
             hintMove={hintMove}
           />
-          {gameOver && mode !== 'edit' && (
+          {gameOver && !isEditMode && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center rounded z-50">
               <div className="bg-white border border-amber-200 rounded-3xl p-6 mx-6 text-center w-full max-w-xs shadow-2xl">
                 <div className="text-4xl font-bold text-red-700 mb-2">{gameOver}</div>
-                <div className="text-gray-500 text-sm mb-5">共走 {game.history.length} 步</div>
+                <div className="text-gray-400 text-sm mb-5">共走 {game.history.length} 步</div>
                 <div className="flex gap-2">
                   <button onClick={restartGame}
-                    className="flex-1 py-3 bg-red-700 text-yellow-200 rounded-xl font-bold text-base shadow">
-                    再来一局
-                  </button>
+                    className="flex-1 py-3 bg-red-700 text-yellow-200 rounded-xl font-bold text-base shadow">再来一局</button>
                   <button onClick={()=>setMode('menu')}
-                    className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-600 rounded-xl text-base font-medium">
-                    主菜单
-                  </button>
+                    className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-600 rounded-xl text-base font-medium">主菜单</button>
                 </div>
               </div>
             </div>
@@ -544,41 +531,37 @@ export default function App() {
       </div>
 
       {/* MY STRIP */}
-      <div className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-amber-100 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-red-600 shadow-sm" />
-          <span className="text-sm font-bold text-red-700">
-            红方：{getPlayerLabel('red')}
-          </span>
+      {!isEditMode && (
+        <div className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-amber-100 shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-red-600 shadow-sm" />
+            <span className="text-sm font-bold text-red-700">红方：{getPlayerLabel('red')}</span>
+          </div>
+          <div className="flex gap-1.5">
+            {activeCheat !== 'none' && (
+              <span className="text-red-600 text-xs font-medium animate-pulse bg-red-50 px-2 py-0.5 rounded-full border border-red-200">点击棋盘目标格</span>
+            )}
+            {hintMove && !isHinting && (
+              <span className="text-green-600 text-xs font-medium bg-green-50 px-2 py-0.5 rounded-full border border-green-200">💡 已显示提示</span>
+            )}
+          </div>
         </div>
-        {activeCheat !== 'none' && (
-          <span className="text-red-600 text-xs font-medium animate-pulse bg-red-50 px-2 py-0.5 rounded-full border border-red-200">
-            点击棋盘目标格
-          </span>
-        )}
-        {mode==='edit' && editPiece && editPiece!=='eraser' && (
-          <span className="text-blue-600 text-xs font-medium bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
-            点击棋盘放置棋子
-          </span>
-        )}
-        {hintMove && !isHinting && (
-          <span className="text-green-600 text-xs font-medium bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
-            💡 已显示提示
-          </span>
-        )}
-      </div>
+      )}
 
-      {/* BOTTOM BAR */}
+      {/* BOTTOM BAR — always fully visible, board scrolls above it */}
       <div className="bg-white border-t border-amber-200 shadow-sm shrink-0">
         <div className="flex items-stretch gap-2 px-3 py-2.5">
+
+          {/* Undo / 撤销 */}
           <button onClick={handleUndo}
-            disabled={(mode==='edit'?editHistory.length===0:game.history.length===0)||isThinking}
+            disabled={(isEditMode ? editHistory.length===0 : game.history.length===0) || isThinking}
             className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
             <RotateCcw className="w-4 h-4" />
-            悔棋
+            {isEditMode ? '撤销' : '悔棋'}
           </button>
 
-          {mode !== 'edit' && (
+          {/* Restart (not in edit) */}
+          {!isEditMode && (
             <button onClick={restartGame} disabled={isThinking}
               className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
               <RefreshCw className="w-4 h-4" />
@@ -586,47 +569,52 @@ export default function App() {
             </button>
           )}
 
-          {/* Hint button (not in edit mode) */}
-          {mode !== 'edit' && humanTurn && !isThinking && (
-            <button onClick={handleHint} disabled={isHinting || isThinking || !!game.getWinner()}
+          {/* Hint (not in edit) */}
+          {!isEditMode && humanTurn && !isThinking && (
+            <button onClick={handleHint} disabled={isHinting || !!game.getWinner()}
               className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium active:scale-95 transition-all",
-                isHinting ? "bg-yellow-100 border-yellow-300 text-yellow-700 animate-pulse"
-                  : "bg-yellow-50 hover:bg-yellow-100 border-yellow-300 text-yellow-700 disabled:opacity-30"
-              )}>
+                isHinting
+                  ? "bg-yellow-100 border-yellow-300 text-yellow-700 animate-pulse"
+                  : "bg-yellow-50 hover:bg-yellow-100 border-yellow-300 text-yellow-700 disabled:opacity-30")}>
               <Lightbulb className="w-4 h-4" />
               {isHinting ? '分析中' : '提示'}
             </button>
           )}
 
-          {/* Edit mode: finish edit */}
-          {mode === 'edit' && (
+          {/* Finish Edit → setup screen */}
+          {isEditMode && (
             <button onClick={finishEdit}
-              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 border border-blue-600 text-white rounded-xl text-sm font-bold active:scale-95 transition-all">
-              <Play className="w-4 h-4" />
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 border border-blue-600 text-white rounded-xl text-sm font-bold active:scale-95 transition-all shadow">
+              <CheckCheck className="w-4 h-4" />
               开始对局
             </button>
           )}
 
+          {/* Drawer toggle */}
           <button onClick={()=>setDrawerOpen(o=>!o)}
-            className={cn(
-              "flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium transition-all active:scale-95",
-              drawerOpen ? "bg-amber-100 border-amber-400 text-amber-800" : "bg-gray-100 hover:bg-gray-200 border-gray-200 text-gray-700"
-            )}>
+            className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium transition-all active:scale-95",
+              drawerOpen ? "bg-amber-100 border-amber-400 text-amber-800" : "bg-gray-100 hover:bg-gray-200 border-gray-200 text-gray-700")}>
             {drawerOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-            {mode==='edit' ? '编辑' : '秘籍'}
+            {isEditMode ? '编辑' : '秘籍'}
           </button>
         </div>
 
         {/* DRAWER */}
         {drawerOpen && (
-          <div className="border-t border-amber-200 px-3 pt-3 pb-3 space-y-3 bg-amber-50">
-            {mode === 'edit' ? (
+          <div className="border-t border-amber-200 px-3 pt-3 pb-4 bg-amber-50 space-y-3">
+            {isEditMode ? (
               <EditDrawer
-                game={game}
                 editPiece={editPiece}
                 setEditPiece={setEditPiece}
-                onReset={()=>{setEditHistory(p=>[...p,game]);setGame(new Xiangqi());}}
-                onClear={()=>{const g=game.clone();setEditHistory(p=>[...p,game]);g.clearBoard();g.setPiece(9,4,{id:'k_red',type:'k',color:'red'});g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});setGame(g);}}
+                onReset={()=>{ setEditHistory(p=>[...p,game]); setGame(new Xiangqi()); }}
+                onClear={()=>{
+                  const g = game.clone();
+                  setEditHistory(p=>[...p,game]);
+                  g.clearBoard();
+                  g.setPiece(9,4,{id:'k_red',type:'k',color:'red'});
+                  g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});
+                  setGame(g);
+                }}
               />
             ) : (
               <CheatDrawer
@@ -648,25 +636,21 @@ export default function App() {
         )}
       </div>
 
-      {showSettings && (
-        <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}}
-          onClose={()=>setShowSettings(false)} />
-      )}
+      {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
     </div>
   );
 }
 
-// ─── EDIT DRAWER ─────────────────────────────────────────────────
-function EditDrawer({ game, editPiece, setEditPiece, onReset, onClear }: {
-  game: Xiangqi;
+// ── EditDrawer ────────────────────────────────────────────────────
+function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
   editPiece: Piece | 'eraser' | null;
   setEditPiece: (p: Piece | 'eraser' | null) => void;
   onReset: () => void;
   onClear: () => void;
 }) {
-  const SERIF = { fontFamily: "'Noto Serif SC','STKaiti',serif" };
+  const ep = editPiece !== 'eraser' ? editPiece as Piece | null : null;
   return (
-    <div className="space-y-3" style={SERIF}>
+    <div className="space-y-3">
       <div className="flex gap-2">
         <button onClick={onReset}
           className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 active:scale-95 transition-all">
@@ -683,23 +667,23 @@ function EditDrawer({ game, editPiece, setEditPiece, onReset, onClear }: {
           {(['k','a','e','h','r','c','p'] as const).map(type=>(
             <button key={`r-${type}`} onClick={()=>setEditPiece({id:`${type}_red`,type,color:'red'})}
               className={cn("flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all",
-                editPiece!=='eraser'&&(editPiece as Piece)?.type===type&&(editPiece as Piece)?.color==='red'
+                editPiece!=='eraser' && ep?.type===type && ep?.color==='red'
                   ?"border-red-700 bg-red-700 text-yellow-200 scale-110 shadow"
-                  :"border-red-200 bg-white text-red-700 hover:bg-red-50")}>
+                  :"border-red-200 bg-white text-red-700 hover:bg-red-50 active:scale-95")}>
               {type==='k'?'帅':type==='a'?'仕':type==='e'?'相':type==='h'?'马':type==='r'?'车':type==='c'?'炮':'兵'}
             </button>
           ))}
         </div>
       </div>
       <div>
-        <div className="text-gray-600 text-xs font-bold mb-2 pl-1">黑方棋子</div>
+        <div className="text-gray-700 text-xs font-bold mb-2 pl-1">黑方棋子</div>
         <div className="flex gap-1.5">
           {(['k','a','e','h','r','c','p'] as const).map(type=>(
             <button key={`b-${type}`} onClick={()=>setEditPiece({id:`${type}_black`,type,color:'black'})}
               className={cn("flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all",
-                editPiece!=='eraser'&&(editPiece as Piece)?.type===type&&(editPiece as Piece)?.color==='black'
+                editPiece!=='eraser' && ep?.type===type && ep?.color==='black'
                   ?"border-gray-800 bg-gray-800 text-white scale-110 shadow"
-                  :"border-gray-300 bg-white text-gray-800 hover:bg-gray-50")}>
+                  :"border-gray-300 bg-white text-gray-800 hover:bg-gray-50 active:scale-95")}>
               {type==='k'?'将':type==='a'?'士':type==='e'?'象':type==='h'?'马':type==='r'?'车':type==='c'?'炮':'卒'}
             </button>
           ))}
@@ -707,39 +691,31 @@ function EditDrawer({ game, editPiece, setEditPiece, onReset, onClear }: {
       </div>
       <button onClick={()=>setEditPiece('eraser')}
         className={cn("w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium border-2 transition-all active:scale-95",
-          editPiece==='eraser'?"border-orange-400 bg-orange-100 text-orange-700":"border-gray-200 bg-white text-gray-500 hover:bg-gray-50")}>
+          editPiece==='eraser'?"border-orange-400 bg-orange-100 text-orange-700 shadow":"border-gray-200 bg-white text-gray-500 hover:bg-gray-50")}>
         <Eraser className="w-4 h-4"/>橡皮擦
       </button>
     </div>
   );
 }
 
-// ─── CHEAT DRAWER ─────────────────────────────────────────────────
+// ── CheatDrawer ───────────────────────────────────────────────────
 function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, setCheatPassword,
   activeCheat, setActiveCheat, revivePiece, setRevivePiece, onUnlock, hintDifficulty, setHintDifficulty }: any) {
-  const SERIF = { fontFamily: "'Noto Serif SC','STKaiti',serif" };
   return (
-    <div className="space-y-3" style={SERIF}>
-      {/* Hint difficulty setting */}
+    <div className="space-y-3">
       <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Lightbulb className="w-4 h-4 text-yellow-600"/>
             <span className="text-sm font-bold text-yellow-700">提示强度</span>
           </div>
-          <select value={hintDifficulty} onChange={(e)=>setHintDifficulty(Number(e.target.value))}
-            className="bg-white border border-yellow-300 text-yellow-800 rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none focus:border-yellow-500">
-            <option value={1}>普通</option>
-            <option value={2}>村冠</option>
-            <option value={3}>镇冠</option>
-            <option value={4}>县冠</option>
-            <option value={5}>大师</option>
+          <select value={hintDifficulty} onChange={(e:any)=>setHintDifficulty(Number(e.target.value))}
+            className="bg-white border border-yellow-300 text-yellow-800 rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none">
+            {[1,2,3,4,5].map(v=><option key={v} value={v}>{['普通','村冠','镇冠','县冠','大师'][v-1]}</option>)}
           </select>
         </div>
-        <div className="text-xs text-yellow-600 mt-1.5">强度越高分析越准，思考时间越长</div>
+        <div className="text-xs text-yellow-600 mt-1.5">强度越高分析越准，耗时越长</div>
       </div>
-
-      {/* Cheat unlock */}
       {!isCheatModeUnlocked ? (
         <form onSubmit={onUnlock} className="flex gap-2">
           <input type="password" value={cheatPassword} onChange={(e:any)=>setCheatPassword(e.target.value)}
@@ -775,7 +751,7 @@ function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, se
                 </button>
               ))}
               {game.capturedPieces.filter((p:any)=>p.color===playerColor).length===0&&
-                <span className="text-gray-400 text-xs py-2">无阵亡棋子</span>}
+                <span className="text-gray-400 text-xs py-1.5">无阵亡棋子</span>}
             </div>
           </div>
         </>
@@ -784,7 +760,7 @@ function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, se
   );
 }
 
-// ─── SETTINGS MODAL ───────────────────────────────────────────────
+// ── SettingsModal ─────────────────────────────────────────────────
 interface SettingsModalProps {
   aiDifficulty:number; setAiDifficulty:(v:number)=>void;
   boardTheme:BoardTheme; setBoardTheme:(v:BoardTheme)=>void;
@@ -798,24 +774,24 @@ function SettingsModal({aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pi
       <div className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:max-w-sm shadow-2xl border border-amber-200">
         <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-amber-100">
           <h2 className="text-xl font-bold text-gray-800">设置</h2>
-          <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 bg-gray-100 rounded-xl active:scale-95 transition-all">
+          <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 bg-gray-100 rounded-xl active:scale-95">
             <X className="w-5 h-5"/>
           </button>
         </div>
         <div className="px-5 py-4 space-y-4">
           {[
             { label:'人机难度', value:aiDifficulty, onChange:(v:string)=>setAiDifficulty(Number(v)),
-              options:[['1','普通'],['2','村冠'],['3','镇冠'],['4','县冠'],['5','大师']] },
+              opts:[['1','普通'],['2','村冠'],['3','镇冠'],['4','县冠'],['5','大师']] },
             { label:'棋盘样式', value:boardTheme, onChange:(v:string)=>setBoardTheme(v as BoardTheme),
-              options:[['classic','经典'],['wood','木纹'],['paper','纸质']] },
+              opts:[['classic','经典'],['wood','木纹'],['paper','纸质']] },
             { label:'棋子样式', value:pieceTheme, onChange:(v:string)=>setPieceTheme(v as PieceTheme),
-              options:[['classic','经典'],['wood','木质'],['flat','扁平']] },
-          ].map(({label,value,onChange,options})=>(
+              opts:[['classic','经典'],['wood','木质'],['flat','扁平']] },
+          ].map(({label,value,onChange,opts})=>(
             <div key={label} className="flex items-center justify-between">
               <span className="text-gray-700 font-medium text-base">{label}</span>
               <select value={value} onChange={e=>onChange(e.target.value)}
-                className="bg-amber-50 border border-amber-300 text-gray-800 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:border-amber-500">
-                {options.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                className="bg-amber-50 border border-amber-300 text-gray-800 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none">
+                {opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}
               </select>
             </div>
           ))}

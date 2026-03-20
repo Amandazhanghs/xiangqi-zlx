@@ -58,6 +58,20 @@ export default function App() {
   const workerRef = useRef<Worker | null>(null);
   const hintWorkerRef = useRef<Worker | null>(null);
 
+  // ── Kill & recreate workers ─────────────────────────────────────
+  // Must be called whenever the user navigates away while AI is thinking,
+  // so the old worker cannot fire stale results into a new game.
+  const resetWorkers = () => {
+    workerRef.current?.terminate();
+    hintWorkerRef.current?.terminate();
+    workerRef.current = new AiWorker();
+    hintWorkerRef.current = new AiWorker();
+    setIsThinking(false);
+    setIsHinting(false);
+    setAiProgress(0);
+    setHintMove(null);
+  };
+
   useEffect(() => {
     workerRef.current = new AiWorker();
     hintWorkerRef.current = new AiWorker();
@@ -221,19 +235,21 @@ export default function App() {
   };
 
   const startLocal = () => {
+    resetWorkers();
     setMode('local'); setPlayerColor('both'); setGame(new Xiangqi());
     setGameOver(null); setIsCheatModeUnlocked(false); setActiveCheat('none');
-    setDrawerOpen(false); setHintMove(null); setAiColors(new Set());
+    setDrawerOpen(false); setAiColors(new Set());
   };
 
   const startAI = (color: 'red'|'black') => {
+    resetWorkers();
     setMode('ai'); setPlayerColor(color); setGame(new Xiangqi());
     setGameOver(null); setIsCheatModeUnlocked(false); setActiveCheat('none');
-    setDrawerOpen(false); setHintMove(null);
+    setDrawerOpen(false);
   };
 
   const restartGame = () => {
-    setHintMove(null); setGameOver(null);
+    setGameOver(null);
     if (mode === 'ai') startAI(playerColor as 'red'|'black');
     else if (mode === 'local') startLocal();
     else if (mode === 'custom' && setupGame) launchCustomGame(customConfig, setupGame);
@@ -255,16 +271,18 @@ export default function App() {
     setActiveCheat('none');
     setDrawerOpen(false);
     setHintMove(null);
+    resetWorkers();
     setMode('custom');
   };
 
   const startEdit = () => {
+    resetWorkers();
     setMode('edit'); setPlayerColor('both');
     const g = new Xiangqi(); g.clearBoard();
     g.setPiece(9,4,{id:'k_red',type:'k',color:'red'});
     g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});
     setGame(g); setEditHistory([]); setEditPiece(null); setGameOver(null);
-    setIsCheatModeUnlocked(false); setActiveCheat('none'); setDrawerOpen(false); setHintMove(null);
+    setIsCheatModeUnlocked(false); setActiveCheat('none'); setDrawerOpen(false);
   };
 
   // Edit done → go to setup screen
@@ -456,7 +474,8 @@ export default function App() {
 
       {/* TOP BAR */}
       <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-amber-200 shadow-sm shrink-0">
-        <button onClick={()=>setMode('menu')}
+        {/* Back button — resets workers before returning to menu */}
+        <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
           className="flex items-center gap-1.5 text-gray-600 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all">
           <ArrowLeft className="w-4 h-4" />
           <span className="text-sm font-medium">返回</span>
@@ -499,7 +518,7 @@ export default function App() {
         </div>
       )}
 
-      {/* BOARD — flex-1 fills remaining height */}
+      {/* BOARD */}
       <div className="flex-1 flex items-center justify-center py-1 px-2 min-h-0">
         <div className="relative flex items-center justify-center w-full h-full">
           <Board
@@ -521,7 +540,7 @@ export default function App() {
                 <div className="flex gap-2">
                   <button onClick={restartGame}
                     className="flex-1 py-3 bg-red-700 text-yellow-200 rounded-xl font-bold text-base shadow">再来一局</button>
-                  <button onClick={()=>setMode('menu')}
+                  <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
                     className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-600 rounded-xl text-base font-medium">主菜单</button>
                 </div>
               </div>
@@ -548,11 +567,10 @@ export default function App() {
         </div>
       )}
 
-      {/* BOTTOM BAR — always fully visible, board scrolls above it */}
+      {/* BOTTOM BAR */}
       <div className="bg-white border-t border-amber-200 shadow-sm shrink-0">
         <div className="flex items-stretch gap-2 px-3 py-2.5">
 
-          {/* Undo / 撤销 */}
           <button onClick={handleUndo}
             disabled={(isEditMode ? editHistory.length===0 : game.history.length===0) || isThinking}
             className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
@@ -560,7 +578,6 @@ export default function App() {
             {isEditMode ? '撤销' : '悔棋'}
           </button>
 
-          {/* Restart (not in edit) */}
           {!isEditMode && (
             <button onClick={restartGame} disabled={isThinking}
               className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
@@ -569,7 +586,6 @@ export default function App() {
             </button>
           )}
 
-          {/* Hint (not in edit) */}
           {!isEditMode && humanTurn && !isThinking && (
             <button onClick={handleHint} disabled={isHinting || !!game.getWinner()}
               className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium active:scale-95 transition-all",
@@ -581,7 +597,6 @@ export default function App() {
             </button>
           )}
 
-          {/* Finish Edit → setup screen */}
           {isEditMode && (
             <button onClick={finishEdit}
               className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 border border-blue-600 text-white rounded-xl text-sm font-bold active:scale-95 transition-all shadow">
@@ -590,7 +605,6 @@ export default function App() {
             </button>
           )}
 
-          {/* Drawer toggle */}
           <button onClick={()=>setDrawerOpen(o=>!o)}
             className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium transition-all active:scale-95",
               drawerOpen ? "bg-amber-100 border-amber-400 text-amber-800" : "bg-gray-100 hover:bg-gray-200 border-gray-200 text-gray-700")}>
@@ -599,7 +613,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* DRAWER */}
         {drawerOpen && (
           <div className="border-t border-amber-200 px-3 pt-3 pb-4 bg-amber-50 space-y-3">
             {isEditMode ? (

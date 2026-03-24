@@ -710,6 +710,7 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
       </div>
     </div>
   );
+}
 
 // ── CheatDrawer ───────────────────────────────────────────────────
 function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, setCheatPassword,

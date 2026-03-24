@@ -681,7 +681,6 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
         </button>
       </div>
       <div>
-        <div className="text-red-600 text-xs font-bold mb-2 pl-1">红方棋子</div>
         <div className="flex gap-1.5">
           {(['k','a','e','h','r','c','p'] as const).map(type=>(
             <button key={`r-${type}`} onClick={()=>setEditPiece({id:`${type}_red`,type,color:'red'})}
@@ -695,7 +694,6 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
         </div>
       </div>
       <div>
-        <div className="text-gray-700 text-xs font-bold mb-2 pl-1">黑方棋子</div>
         <div className="flex gap-1.5">
           {(['k','a','e','h','r','c','p'] as const).map(type=>(
             <button key={`b-${type}`} onClick={()=>setEditPiece({id:`${type}_black`,type,color:'black'})}

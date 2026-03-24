@@ -106,6 +106,38 @@ export function Board({
   };
   const lc = lineColor[boardTheme];
 
+  // Compute hint arrow pixel coordinates (center of from/to cells)
+  const getHintArrow = () => {
+    if (!hintMove) return null;
+    const fromR = isFlipped ? 9 - hintMove.from.r : hintMove.from.r;
+    const fromC = isFlipped ? 8 - hintMove.from.c : hintMove.from.c;
+    const toR = isFlipped ? 9 - hintMove.to.r : hintMove.to.r;
+    const toC = isFlipped ? 8 - hintMove.to.c : hintMove.to.c;
+
+    const x1 = fromC * CS;
+    const y1 = fromR * CS;
+    const x2 = toC * CS;
+    const y2 = toR * CS;
+
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) return null;
+
+    // Shorten arrow slightly so it doesn't overlap piece centers completely
+    const shrink = CS * 0.28;
+    const ux = dx / len;
+    const uy = dy / len;
+    const ax1 = x1 + ux * shrink;
+    const ay1 = y1 + uy * shrink;
+    const ax2 = x2 - ux * shrink;
+    const ay2 = y2 - uy * shrink;
+
+    return { x1: ax1, y1: ay1, x2: ax2, y2: ay2 };
+  };
+
+  const arrow = getHintArrow();
+
   return (
     <div
       className="relative inline-block select-none rounded-lg shadow-2xl"
@@ -134,6 +166,26 @@ export function Board({
         <text x={CS*6} y={CS*4.62} fill={lc} fontSize={CS*0.42}
           fontFamily='"STKaiti","KaiTi","Kaiti SC",serif' textAnchor="middle">汉 界</text>
         <rect x={0.5} y={0.5} width={BOARD_W-1} height={BOARD_H-1} fill="none" stroke={lc} strokeWidth={1.5} />
+
+        {/* Hint arrow */}
+        {arrow && (
+          <>
+            <defs>
+              <marker id="hint-arrowhead" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L6,3 z" fill="rgba(22,163,74,0.92)" />
+              </marker>
+            </defs>
+            <line
+              x1={arrow.x1} y1={arrow.y1}
+              x2={arrow.x2} y2={arrow.y2}
+              stroke="rgba(22,163,74,0.88)"
+              strokeWidth={CS * 0.13}
+              strokeLinecap="round"
+              markerEnd="url(#hint-arrowhead)"
+              style={{ filter: 'drop-shadow(0 0 3px rgba(22,163,74,0.5))' }}
+            />
+          </>
+        )}
       </svg>
 
       <div className="relative" style={{ width: BOARD_W, height: BOARD_H }}>
@@ -145,7 +197,6 @@ export function Board({
             const last = game.history[game.history.length-1];
             const isLast = !isEditMode && last &&
               ((last.from.r===aR&&last.from.c===aC)||(last.to.r===aR&&last.to.c===aC));
-            // Hint highlighting
             const isHintFrom = hintMove && hintMove.from.r===aR && hintMove.from.c===aC;
             const isHintTo = hintMove && hintMove.to.r===aR && hintMove.to.c===aC;
 

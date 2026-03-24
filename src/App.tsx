@@ -664,14 +664,20 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
   const ep = editPiece !== 'eraser' ? editPiece as Piece | null : null;
   return (
     <div className="space-y-3">
+      {/* Three tool buttons on one row */}
       <div className="flex gap-2">
         <button onClick={onReset}
-          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 active:scale-95 transition-all">
-          <RefreshCw className="w-3.5 h-3.5"/>初始局面
+          className="flex-1 flex items-center justify-center gap-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-medium hover:bg-gray-50 active:scale-95 transition-all">
+          <RefreshCw className="w-3 h-3"/>初始局面
         </button>
         <button onClick={onClear}
-          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 active:scale-95 transition-all">
-          <Trash2 className="w-3.5 h-3.5"/>清空棋盘
+          className="flex-1 flex items-center justify-center gap-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-medium hover:bg-gray-50 active:scale-95 transition-all">
+          <Trash2 className="w-3 h-3"/>清空棋盘
+        </button>
+        <button onClick={()=>setEditPiece('eraser')}
+          className={cn("flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium border-2 transition-all active:scale-95",
+            editPiece==='eraser'?"border-orange-400 bg-orange-100 text-orange-700 shadow":"border-gray-200 bg-white text-gray-500 hover:bg-gray-50")}>
+          <Eraser className="w-3 h-3"/>消除
         </button>
       </div>
       <div>
@@ -702,14 +708,8 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
           ))}
         </div>
       </div>
-      <button onClick={()=>setEditPiece('eraser')}
-        className={cn("w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium border-2 transition-all active:scale-95",
-          editPiece==='eraser'?"border-orange-400 bg-orange-100 text-orange-700 shadow":"border-gray-200 bg-white text-gray-500 hover:bg-gray-50")}>
-        <Eraser className="w-4 h-4"/>橡皮擦
-      </button>
     </div>
   );
-}
 
 // ── CheatDrawer ───────────────────────────────────────────────────
 function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, setCheatPassword,

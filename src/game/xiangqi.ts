@@ -16,7 +16,7 @@ export interface Move {
 }
 
 // ─── Draw / Violation Result ────────────────────────────────────────
-export type DrawReason = 'repetition5' | 'moves120';
+export type DrawReason = 'repetition5' | 'moves120' | 'noOffensivePieces';
 
 export interface RepetitionViolation {
   violator: PieceColor;   // who must change their move
@@ -65,6 +65,19 @@ export class Xiangqi {
     // Record initial position
     this._recordPosition();
   }
+
+  private _hasOffensivePieces(color: PieceColor): boolean {
+  const offensiveTypes: PieceType[] = ['r', 'h', 'c', 'p'];
+  for (let r = 0; r < 10; r++) {
+    for (let c = 0; c < 9; c++) {
+      const p = this.board[r][c];
+      if (p && p.color === color && offensiveTypes.includes(p.type)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
   initBoard() {
     const initialFen = [
@@ -404,7 +417,10 @@ export class Xiangqi {
     }
     return moves;
   }
-
+  
+  isDrawByNoOffensivePieces(): boolean {
+    return !this._hasOffensivePieces('red') && !this._hasOffensivePieces('black');
+  }
   // ── Draw by 120 half-moves without capture ───────────────────────
   isDrawBy120(): boolean {
     return this.movesSinceCapture >= 120;
@@ -687,6 +703,9 @@ export class Xiangqi {
     if (!blackKing) return 'red';
 
     // Draw conditions
+      if (!this._hasOffensivePieces('red') && !this._hasOffensivePieces('black')) {
+    return 'draw';
+  }
     if (this.isDrawBy120()) return 'draw';
     if (this.isDrawByRepetition5()) return 'draw';
 

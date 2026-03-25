@@ -83,6 +83,10 @@ export default function App() {
 
   const [editPiece, setEditPiece] = useState<Piece | 'eraser' | null>(null);
   const [editHistory, setEditHistory] = useState<Xiangqi[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isBoardFlipped, setIsBoardFlipped] = useState(false);
+  // Snapshot of the board at the moment "开始对局" was pressed (for "继续编辑")
+  const [editStartGame, setEditStartGame] = useState<Xiangqi | null>(null);
   const [isCheatModeUnlocked, setIsCheatModeUnlocked] = useState(false);
   const [cheatPassword, setCheatPassword] = useState('');
   const [activeCheat, setActiveCheat] = useState<'none' | 'armor' | 'drift' | 'revive' | 'betray'>('none');
@@ -209,11 +213,23 @@ export default function App() {
   };
 
   const handleEditClick = (r: number, c: number) => {
-    if (!editPiece) return;
     const newGame = game.clone();
+    const clickedPiece = newGame.getPiece(r, c);
+
+    // If no tool selected and clicked on a piece → select that piece for moving
+    if (!editPiece) {
+      if (clickedPiece) setEditPiece(clickedPiece);
+      return;
+    }
+
+    // If a non-eraser piece is selected and user clicks the same-color piece → select new piece instead
+    if (editPiece !== 'eraser' && clickedPiece && clickedPiece.color === (editPiece as Piece).color) {
+      setEditPiece(clickedPiece);
+      return;
+    }
+
     if (editPiece === 'eraser') {
-      const p = newGame.getPiece(r, c);
-      if (p && p.type === 'k') { alert('将帅不能被删除！'); return; }
+      if (clickedPiece && clickedPiece.type === 'k') { setEditError('将帅不能被删除！'); return; }
       newGame.setPiece(r, c, null);
     } else {
       const isRed = editPiece.color === 'red';
@@ -224,21 +240,31 @@ export default function App() {
         case 'e': valid = isRed ? (r>=5&&r<=9&&[0,2,4,6,8].includes(c)&&(r+c)%2!==0) : (r>=0&&r<=4&&[0,2,4,6,8].includes(c)&&(r+c)%2===0); break;
         case 'p': valid = isRed ? (r<=6&&(r<=4||[0,2,4,6,8].includes(c))) : (r>=3&&(r>=5||[0,2,4,6,8].includes(c))); break;
       }
-      if (!valid) { alert('该棋子不能放置在此位置！'); return; }
-      const existing = newGame.getPiece(r, c);
-      if (existing && existing.type==='k' && existing.color!==editPiece.color) { alert('不能覆盖对方的将帅！'); return; }
-      if (existing && existing.type==='k' && editPiece.type!=='k') { alert('将帅不能被覆盖！'); return; }
+      if (!valid) { setEditError('该棋子不能放置在此位置！'); return; }
+      if (clickedPiece && clickedPiece.type==='k' && clickedPiece.color!==editPiece.color) { setEditError('不能覆盖对方的将帅！'); return; }
+      if (clickedPiece && clickedPiece.type==='k' && editPiece.type!=='k') { setEditError('将帅不能被覆盖！'); return; }
       if (editPiece.type !== 'k') {
         let count = 0;
         for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type===editPiece.type&&p.color===editPiece.color) count++; }
-        if (!existing||existing.type!==editPiece.type||existing.color!==editPiece.color) {
-          if (count >= (editPiece.type==='p'?5:2)) { alert('不能添加超过正常数量的棋子！'); return; }
+        if (!clickedPiece||clickedPiece.type!==editPiece.type||clickedPiece.color!==editPiece.color) {
+          if (count >= (editPiece.type==='p'?5:2)) { setEditError('不能添加超过正常数量的棋子！'); return; }
+        }
+      }
+      // If dragging an existing piece (same piece selected by clicking it), remove from old pos first
+      const isSamePiece = clickedPiece && clickedPiece.id === (editPiece as Piece).id;
+      if (!isSamePiece) {
+        // Remove the source piece if it came from the board (has a board position)
+        for (let i=0;i<10;i++) for (let j=0;j<9;j++) {
+          const p=newGame.getPiece(i,j);
+          if(p && p.id===(editPiece as Piece).id) newGame.setPiece(i,j,null);
         }
       }
       if (editPiece.type === 'k') {
         for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type==='k'&&p.color===editPiece.color) newGame.setPiece(i,j,null); }
       }
       newGame.setPiece(r, c, { ...editPiece, id:`${editPiece.type}_${editPiece.color}_${Date.now()}_${Math.random()}` });
+      // After placing, deselect if it was a board piece being moved
+      setEditPiece(null);
     }
     setEditHistory(prev => [...prev, game]);
     setGame(newGame);
@@ -316,7 +342,9 @@ export default function App() {
   };
 
   const finishEdit = () => {
-    setSetupGame(game.clone());
+    const snap = game.clone();
+    setSetupGame(snap);
+    setEditStartGame(snap);
     setCustomConfig({ redPlayer: 'human', blackPlayer: 'ai', firstMove: 'red' });
     setMode('setup');
   };
@@ -575,6 +603,7 @@ export default function App() {
             onSquareClickOverride={activeCheat!=='none'?handleCheatAction:undefined}
             hintMove={hintMove}
             forbiddenMoves={currentForbiddenMoves}
+            flipped={isBoardFlipped}
           />
           {gameOver && !isEditMode && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center rounded z-50">
@@ -584,8 +613,21 @@ export default function App() {
                 <div className="flex gap-2">
                   <button onClick={restartGame}
                     className="flex-1 py-3 bg-red-700 text-yellow-200 rounded-xl font-bold text-base shadow">再来一局</button>
-                  <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
-                    className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-600 rounded-xl text-base font-medium">主菜单</button>
+                  {mode === 'custom' && editStartGame ? (
+                    <button onClick={()=>{
+                      resetWorkers();
+                      setGameOver(null);
+                      setGame(editStartGame.clone());
+                      setEditHistory([]);
+                      setEditPiece(null);
+                      setRepetitionViolation(null);
+                      setMode('edit');
+                    }}
+                      className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-base font-medium">继续编辑</button>
+                  ) : (
+                    <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
+                      className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-600 rounded-xl text-base font-medium">主菜单</button>
+                  )}
                 </div>
               </div>
             </div>
@@ -615,12 +657,20 @@ export default function App() {
       <div className="bg-white border-t border-amber-200 shadow-sm shrink-0">
         <div className="flex items-stretch gap-2 px-3 py-2.5">
 
-          <button onClick={handleUndo}
-            disabled={(isEditMode ? editHistory.length===0 : game.history.length===0) || isThinking}
-            className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
-            <RotateCcw className="w-4 h-4" />
-            {isEditMode ? '撤销' : '悔棋'}
-          </button>
+          {isEditMode ? (
+            <button onClick={()=>setIsBoardFlipped(f=>!f)}
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-purple-100 hover:bg-purple-200 border border-purple-300 text-purple-700 rounded-xl text-sm font-medium active:scale-95 transition-all">
+              <RefreshCw className="w-4 h-4" />
+              翻转
+            </button>
+          ) : (
+            <button onClick={handleUndo}
+              disabled={game.history.length===0 || isThinking}
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
+              <RotateCcw className="w-4 h-4" />
+              悔棋
+            </button>
+          )}
 
           {!isEditMode && (
             <button onClick={restartGame} disabled={isThinking}
@@ -663,6 +713,8 @@ export default function App() {
               <EditDrawer
                 editPiece={editPiece}
                 setEditPiece={setEditPiece}
+                onUndo={handleUndo}
+                undoDisabled={editHistory.length===0}
                 onReset={()=>{ setEditHistory(p=>[...p,game]); setGame(new Xiangqi()); }}
                 onClear={()=>{
                   const g = game.clone();
@@ -694,16 +746,31 @@ export default function App() {
       </div>
 
       {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
+
+      {/* EDIT ERROR MODAL */}
+      {editError && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 mx-6 text-center w-full max-w-xs shadow-2xl border border-amber-200">
+            <div className="text-lg font-bold text-gray-800 mb-4">{editError}</div>
+            <button onClick={()=>setEditError(null)}
+              className="w-full py-3 bg-red-700 text-yellow-200 rounded-xl font-bold text-base active:scale-95 transition-all shadow">
+              确定
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── EditDrawer ────────────────────────────────────────────────────
-function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
+function EditDrawer({ editPiece, setEditPiece, onReset, onClear, onUndo, undoDisabled }: {
   editPiece: Piece | 'eraser' | null;
   setEditPiece: (p: Piece | 'eraser' | null) => void;
   onReset: () => void;
   onClear: () => void;
+  onUndo: () => void;
+  undoDisabled: boolean;
 }) {
   const ep = editPiece !== 'eraser' ? editPiece as Piece | null : null;
   return (
@@ -721,6 +788,10 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
           className={cn("flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium border-2 transition-all active:scale-95",
             editPiece==='eraser'?"border-orange-400 bg-orange-100 text-orange-700 shadow":"border-gray-200 bg-white text-gray-500 hover:bg-gray-50")}>
           <Eraser className="w-3 h-3"/>消除
+        </button>
+        <button onClick={onUndo} disabled={undoDisabled}
+          className="flex-1 flex items-center justify-center gap-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-medium hover:bg-gray-50 active:scale-95 transition-all disabled:opacity-30">
+          <RotateCcw className="w-3 h-3"/>撤销
         </button>
       </div>
       <div>

@@ -26,6 +26,7 @@ interface BoardProps {
   onEditClick?: (r: number, c: number) => void;
   onSquareClickOverride?: (r: number, c: number) => void;
   hintMove?: Move | null;
+  forbiddenMoves?: Move[]; // moves the current player is NOT allowed to make
 }
 
 export function Board({
@@ -33,6 +34,7 @@ export function Board({
   boardTheme = 'classic', pieceTheme = 'classic',
   isEditMode = false, onEditClick, onSquareClickOverride,
   hintMove = null,
+  forbiddenMoves = [],
 }: BoardProps) {
   const [selected, setSelected] = React.useState<{ r: number; c: number } | null>(null);
   const [validMoves, setValidMoves] = React.useState<Move[]>([]);
@@ -72,7 +74,15 @@ export function Board({
     if (piece && piece.color === game.turn) {
       if (playerColor !== 'both' && piece.color !== playerColor) return;
       setSelected({ r, c });
-      setValidMoves(game.getValidMoves(r, c));
+      // Filter out forbidden moves so they won't show as valid
+      const allValid = game.getValidMoves(r, c);
+      const filtered = allValid.filter(m =>
+        !forbiddenMoves.some(f =>
+          f.from.r === m.from.r && f.from.c === m.from.c &&
+          f.to.r === m.to.r && f.to.c === m.to.c
+        )
+      );
+      setValidMoves(filtered);
     } else {
       setSelected(null); setValidMoves([]);
     }

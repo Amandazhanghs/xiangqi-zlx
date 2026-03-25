@@ -256,18 +256,16 @@ export function Board({
         {arrow && (
           <>
             <defs>
-              <marker
-                id="hint-arrowhead"
-                markerWidth="10"
-                markerHeight="6"
-                refX="9"
-                refY="3"
-                orient="auto"
-              >
-                <path
-                  d="M0,1.5 L8,3 L0,4.5 C0.5,3 0.5,3 0,1.5 Z"
-                  fill="rgba(22,163,74,0.95)"
-                />
+             <marker
+  id="hint-arrowhead"
+  markerWidth="10"    // 宽度不变（尖端到左边缘距离仍为 8）
+  markerHeight="5"    // 从 6 改为 5，因为三角形上下范围缩小了
+  refX="8"            // 尖端 x 坐标
+  refY="3"            // 尖端 y 坐标（保持不变）
+  orient="auto"
+>
+  <path d="M0,2 L8,3 L0,4 Z" fill="rgba(22,163,74,0.95)" />
+</marker>
               </marker>
             </defs>
             <line

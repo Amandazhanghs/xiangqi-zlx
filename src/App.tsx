@@ -6,7 +6,7 @@ import AiWorker from './game/aiWorker?worker';
 import {
   Users, Cpu, ArrowLeft, Settings, Edit3, RotateCcw,
   Eraser, Trash2, RefreshCw, ChevronDown, ChevronUp, X,
-  Lightbulb, Play, CheckCheck
+  Lightbulb, Play, CheckCheck, RefreshCwIcon, FlipVertical
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -16,7 +16,6 @@ function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
 }
 
-// 'setup' = post-edit game configuration screen
 type GameMode = 'menu' | 'ai' | 'local' | 'edit' | 'setup' | 'custom';
 
 interface CustomGameConfig {
@@ -46,11 +45,9 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [hintMove, setHintMove] = useState<Move | null>(null);
   const [isHinting, setIsHinting] = useState(false);
+  const [isFlipped, setIsFlipped] = useState(false); // 打谱翻转状态
 
-  // Active repetition violation — null means no current violation
   const [repetitionViolation, setRepetitionViolation] = useState<RepetitionViolation | null>(null);
-
-  // Setup screen state
   const [setupGame, setSetupGame] = useState<Xiangqi | null>(null);
   const [customConfig, setCustomConfig] = useState<CustomGameConfig>({
     redPlayer: 'human',
@@ -82,6 +79,7 @@ export default function App() {
   }, []);
 
   const [editPiece, setEditPiece] = useState<Piece | 'eraser' | null>(null);
+  const [selectedEditPos, setSelectedEditPos] = useState<{r: number, c: number} | null>(null);
   const [editHistory, setEditHistory] = useState<Xiangqi[]>([]);
   const [isCheatModeUnlocked, setIsCheatModeUnlocked] = useState(false);
   const [cheatPassword, setCheatPassword] = useState('');
@@ -94,7 +92,6 @@ export default function App() {
     return false;
   };
 
-  // Check for game-over and repetition violations after every game state change
   useEffect(() => {
     if (mode !== 'edit' && mode !== 'setup') {
       const winner = game.getWinner();
@@ -103,20 +100,17 @@ export default function App() {
         setRepetitionViolation(null);
         return;
       }
-      // Check for perpetual check/chase at 3+ repetitions
       const violation = game.getRepetitionViolation();
       setRepetitionViolation(violation);
     }
   }, [game, mode]);
 
-  // Forbidden moves for the current turn's player (from repetition violation)
   const currentForbiddenMoves: Move[] = (() => {
     if (!repetitionViolation) return [];
     if (repetitionViolation.violator === game.turn) return repetitionViolation.forbiddenMoves;
     return [];
   })();
 
-  // AI move effect — pass forbidden moves so AI doesn't repeat the violation
   useEffect(() => {
     let isCancelled = false;
     const shouldAiMove = (mode === 'ai' || mode === 'custom') && isAiTurn() && !game.isGameOver();
@@ -124,12 +118,9 @@ export default function App() {
       setIsThinking(true);
       setAiProgress(0);
       setHintMove(null);
-
-      // Forbidden moves for the AI (if it's the violator)
       const aiForbidden = repetitionViolation && repetitionViolation.violator === game.turn
         ? repetitionViolation.forbiddenMoves
         : [];
-
       if (workerRef.current) {
         workerRef.current.onmessage = (e) => {
           if (isCancelled) return;
@@ -209,46 +200,80 @@ export default function App() {
   };
 
   const handleEditClick = (r: number, c: number) => {
-    if (!editPiece) return;
     const newGame = game.clone();
-    if (editPiece === 'eraser') {
-      const p = newGame.getPiece(r, c);
-      if (p && p.type === 'k') { alert('将帅不能被删除！'); return; }
-      newGame.setPiece(r, c, null);
-    } else {
-      const isRed = editPiece.color === 'red';
-      let valid = true;
-      switch (editPiece.type) {
-        case 'k': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5) : (r>=0&&r<=2&&c>=3&&c<=5); break;
-        case 'a': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5&&(r+c)%2===0) : (r>=0&&r<=2&&c>=3&&c<=5&&(r+c)%2!==0); break;
-        case 'e': valid = isRed ? (r>=5&&r<=9&&[0,2,4,6,8].includes(c)&&(r+c)%2!==0) : (r>=0&&r<=4&&[0,2,4,6,8].includes(c)&&(r+c)%2===0); break;
-        case 'p': valid = isRed ? (r<=6&&(r<=4||[0,2,4,6,8].includes(c))) : (r>=3&&(r>=5||[0,2,4,6,8].includes(c))); break;
+    
+    // 逻辑：如果当前选了棋子/橡皮擦，则进行放置
+    if (editPiece) {
+      if (editPiece === 'eraser') {
+        const p = newGame.getPiece(r, c);
+        if (p && p.type === 'k') { alert('将帅不能被删除！'); return; }
+        newGame.setPiece(r, c, null);
+      } else {
+        const isRed = editPiece.color === 'red';
+        let valid = true;
+        switch (editPiece.type) {
+          case 'k': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5) : (r>=0&&r<=2&&c>=3&&c<=5); break;
+          case 'a': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5&&(r+c)%2===0) : (r>=0&&r<=2&&c>=3&&c<=5&&(r+c)%2!==0); break;
+          case 'e': valid = isRed ? (r>=5&&r<=9&&[0,2,4,6,8].includes(c)&&(r+c)%2!==0) : (r>=0&&r<=4&&[0,2,4,6,8].includes(c)&&(r+c)%2===0); break;
+          case 'p': valid = isRed ? (r<=6&&(r<=4||[0,2,4,6,8].includes(c))) : (r>=3&&(r>=5||[0,2,4,6,8].includes(c))); break;
+        }
+        if (!valid) { alert('该棋子不能放置在此位置！'); return; }
+        const existing = newGame.getPiece(r, c);
+        if (existing && existing.type==='k' && existing.color!==editPiece.color) { alert('不能覆盖对方的将帅！'); return; }
+        if (existing && existing.type==='k' && editPiece.type!=='k') { alert('将帅不能被覆盖！'); return; }
+        if (editPiece.type !== 'k') {
+          let count = 0;
+          for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type===editPiece.type&&p.color===editPiece.color) count++; }
+          if (!existing||existing.type!==editPiece.type||existing.color!==editPiece.color) {
+            if (count >= (editPiece.type==='p'?5:2)) { alert('不能添加超过正常数量的棋子！'); return; }
+          }
+        }
+        if (editPiece.type === 'k') {
+          for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type==='k'&&p.color===editPiece.color) newGame.setPiece(i,j,null); }
+        }
+        newGame.setPiece(r, c, { ...editPiece, id:`${editPiece.type}_${editPiece.color}_${Date.now()}` });
       }
-      if (!valid) { alert('该棋子不能放置在此位置！'); return; }
-      const existing = newGame.getPiece(r, c);
-      if (existing && existing.type==='k' && existing.color!==editPiece.color) { alert('不能覆盖对方的将帅！'); return; }
-      if (existing && existing.type==='k' && editPiece.type!=='k') { alert('将帅不能被覆盖！'); return; }
-      if (editPiece.type !== 'k') {
-        let count = 0;
-        for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type===editPiece.type&&p.color===editPiece.color) count++; }
-        if (!existing||existing.type!==editPiece.type||existing.color!==editPiece.color) {
-          if (count >= (editPiece.type==='p'?5:2)) { alert('不能添加超过正常数量的棋子！'); return; }
+      setEditHistory(prev => [...prev, game]);
+      setGame(newGame);
+    } 
+    // 逻辑：如果没选棋子模板，则实现“点击选择-再点击移动”
+    else {
+      if (selectedEditPos) {
+        if (selectedEditPos.r === r && selectedEditPos.c === c) {
+          setSelectedEditPos(null);
+          return;
+        }
+        const movingPiece = game.getPiece(selectedEditPos.r, selectedEditPos.c);
+        if (movingPiece) {
+          // 这里的移动逻辑简化处理，直接设置位置，不进行复杂的行棋验证
+          const targetPiece = game.getPiece(r, c);
+          if (targetPiece && targetPiece.type === 'k') {
+             alert('不能移动到将帅位置！');
+             setSelectedEditPos(null);
+             return;
+          }
+          newGame.setPiece(r, c, movingPiece);
+          newGame.setPiece(selectedEditPos.r, selectedEditPos.c, null);
+          setEditHistory(prev => [...prev, game]);
+          setGame(newGame);
+        }
+        setSelectedEditPos(null);
+      } else {
+        if (game.getPiece(r, c)) {
+          setSelectedEditPos({ r, c });
         }
       }
-      if (editPiece.type === 'k') {
-        for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type==='k'&&p.color===editPiece.color) newGame.setPiece(i,j,null); }
-      }
-      newGame.setPiece(r, c, { ...editPiece, id:`${editPiece.type}_${editPiece.color}_${Date.now()}_${Math.random()}` });
     }
-    setEditHistory(prev => [...prev, game]);
-    setGame(newGame);
   };
 
   const handleUndo = () => {
     setHintMove(null);
     setRepetitionViolation(null);
     if (mode === 'edit') {
-      if (editHistory.length > 0) { setGame(editHistory[editHistory.length-1]); setEditHistory(p=>p.slice(0,-1)); }
+      if (editHistory.length > 0) { 
+        setGame(editHistory[editHistory.length-1]); 
+        setEditHistory(p=>p.slice(0,-1)); 
+      }
     } else {
       const g = game.clone();
       if (mode === 'ai') { g.undo(); g.undo(); }
@@ -329,6 +354,7 @@ export default function App() {
 
   const boardPlayerColor = (): 'red' | 'black' | 'both' => {
     if (mode === 'local' || mode === 'custom') return 'both';
+    if (mode === 'edit') return isFlipped ? 'black' : 'red';
     return playerColor as 'red' | 'black' | 'both';
   };
 
@@ -345,7 +371,6 @@ export default function App() {
   const isEditMode = mode === 'edit';
   const SERIF: React.CSSProperties = { fontFamily: "'Noto Serif SC', 'STKaiti', 'KaiTi', serif" };
 
-  // Violation banner text
   const violationBanner = (() => {
     if (!repetitionViolation) return null;
     const who = repetitionViolation.violator === 'red' ? '红方' : '黑方';
@@ -355,156 +380,9 @@ export default function App() {
     return `检测到${who}${reason}，等待变着`;
   })();
 
-  // ═══════════════════════════════════════════
-  // MENU
-  // ═══════════════════════════════════════════
-  if (mode === 'menu') {
-    return (
-      <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center px-4 py-8" style={SERIF}>
-        <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl border border-amber-200 overflow-hidden">
-          <div className="bg-gradient-to-b from-red-700 to-red-900 px-6 py-8 text-center">
-            <div className="text-5xl font-bold text-yellow-300 tracking-widest mb-1">中国象棋</div>
-            <div className="text-red-200 text-sm tracking-widest mt-1">千年智慧 · 方寸博弈</div>
-          </div>
-          <div className="p-5 space-y-3">
-            <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Cpu className="w-4 h-4 text-red-600" />
-                <span className="text-red-700 font-bold text-sm">人机对战</span>
-                <span className="ml-auto text-xs text-red-400 bg-red-100 px-2 py-0.5 rounded-full">{DIFFICULTY_LABELS[aiDifficulty]}</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={()=>startAI('red')}
-                  className="py-3.5 bg-red-700 hover:bg-red-800 text-yellow-200 rounded-xl font-bold text-base shadow active:scale-95 transition-transform">
-                  执红先手
-                </button>
-                <button onClick={()=>startAI('black')}
-                  className="py-3.5 bg-gray-800 hover:bg-gray-900 text-white rounded-xl font-bold text-base shadow active:scale-95 transition-transform">
-                  执黑后手
-                </button>
-              </div>
-            </div>
-            {[
-              { icon:<Users className="w-5 h-5 text-green-600"/>, label:'双人对战', sub:'本地双人轮流操作', bg:'bg-green-50 border-green-200', action:startLocal },
-              { icon:<Edit3 className="w-5 h-5 text-blue-600"/>, label:'打谱模式', sub:'摆局面 · 自由对弈', bg:'bg-blue-50 border-blue-200', action:startEdit },
-              { icon:<Settings className="w-5 h-5 text-purple-600"/>, label:'设置', sub:'棋盘 · 棋子 · 难度', bg:'bg-purple-50 border-purple-200', action:()=>setShowSettings(true) },
-            ].map(({icon,label,sub,bg,action}) => (
-              <button key={label} onClick={action}
-                className={cn("w-full border rounded-2xl p-4 text-left flex items-center gap-4 active:scale-[0.98] transition-transform", bg)}>
-                <div className="w-11 h-11 bg-white rounded-xl flex items-center justify-center shadow-sm shrink-0">{icon}</div>
-                <div>
-                  <div className="font-bold text-gray-800 text-base">{label}</div>
-                  <div className="text-gray-500 text-xs mt-0.5">{sub}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-        {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
-      </div>
-    );
-  }
-
-  // ═══════════════════════════════════════════
-  // SETUP SCREEN
-  // ═══════════════════════════════════════════
-  if (mode === 'setup') {
-    return (
-      <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center px-4 py-8" style={SERIF}>
-        <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl border border-amber-200 overflow-hidden">
-          <div className="bg-gradient-to-b from-blue-700 to-blue-900 px-6 py-6 text-center">
-            <div className="text-2xl font-bold text-white mb-1">对局设置</div>
-            <div className="text-blue-200 text-sm">配置打谱局面的对弈方式</div>
-          </div>
-          <div className="p-5 space-y-4">
-            <div className="rounded-2xl border border-gray-200 overflow-hidden">
-              <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-200">
-                <span className="font-bold text-gray-700 text-sm">先手方（谁先走棋）</span>
-              </div>
-              <div className="p-3 grid grid-cols-2 gap-2">
-                <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'red'}))}
-                  className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
-                    customConfig.firstMove==='red' ? 'border-red-600 bg-red-600 text-white shadow' : 'border-red-200 bg-red-50 text-red-600')}>
-                  🔴 红方先走
-                </button>
-                <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'black'}))}
-                  className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
-                    customConfig.firstMove==='black' ? 'border-gray-800 bg-gray-800 text-white shadow' : 'border-gray-300 bg-gray-50 text-gray-700')}>
-                  ⚫ 黑方先走
-                </button>
-              </div>
-            </div>
-            <div className="rounded-2xl border border-red-200 overflow-hidden">
-              <div className="bg-red-50 px-4 py-2.5 border-b border-red-200 flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-600 shrink-0"/>
-                <span className="font-bold text-red-700 text-sm">红方由谁执棋</span>
-              </div>
-              <div className="p-3 grid grid-cols-2 gap-2">
-                {(['human','ai'] as const).map(v => (
-                  <button key={v} onClick={()=>setCustomConfig(p=>({...p,redPlayer:v}))}
-                    className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
-                      customConfig.redPlayer===v ? 'border-red-600 bg-red-600 text-white shadow' : 'border-red-200 bg-white text-red-600 hover:bg-red-50')}>
-                    {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-gray-300 overflow-hidden">
-              <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-300 flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-gray-800 shrink-0"/>
-                <span className="font-bold text-gray-700 text-sm">黑方由谁执棋</span>
-              </div>
-              <div className="p-3 grid grid-cols-2 gap-2">
-                {(['human','ai'] as const).map(v => (
-                  <button key={v} onClick={()=>setCustomConfig(p=>({...p,blackPlayer:v}))}
-                    className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
-                      customConfig.blackPlayer===v ? 'border-gray-700 bg-gray-700 text-white shadow' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50')}>
-                    {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">
-              <span className="font-bold">对局预览：</span>
-              {customConfig.firstMove==='red'?'红':'黑'}方先走 ·
-              红={customConfig.redPlayer==='ai'?'电脑':'人类'} ·
-              黑={customConfig.blackPlayer==='ai'?'电脑':'人类'}
-            </div>
-            <div className="flex gap-3 pt-1">
-              <button onClick={() => {
-                        if (setupGame) {
-                          setGame(setupGame.clone());
-                          setEditHistory([]);
-                          setEditPiece(null);
-                          setGameOver(null);
-                          setMode('edit');
-                        } else {
-                          startEdit();
-                        }
-                      }}
-                className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border border-gray-200 active:scale-95 transition-all">
-                <ArrowLeft className="w-4 h-4"/>返回编辑
-              </button>
-              <button onClick={()=>setupGame && launchCustomGame(customConfig, setupGame)}
-                className="flex-1 py-3.5 bg-blue-700 hover:bg-blue-800 text-white rounded-xl font-bold text-base flex items-center justify-center gap-2 shadow active:scale-95 transition-all">
-                <Play className="w-4 h-4"/>开始对局
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ═══════════════════════════════════════════
-  // GAME SCREEN
-  // ═══════════════════════════════════════════
-  const turnColor = game.turn;
-
   return (
     <div className="h-screen max-h-screen flex flex-col bg-amber-50 overflow-hidden" style={SERIF}>
 
-      {/* TOP BAR */}
       <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-amber-200 shadow-sm shrink-0">
         <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
           className="flex items-center gap-1.5 text-gray-600 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all">
@@ -522,7 +400,7 @@ export default function App() {
               isThinking && 'animate-pulse')} />
           )}
           <span className={cn("text-sm font-bold", isEditMode ? "text-blue-700" : "text-amber-900")}>
-            {isEditMode ? '打谱编辑中' : isThinking ? `思考中 ${aiProgress}%` : (turnColor==='red'?'红方走棋':'黑方走棋')}
+            {isEditMode ? '打谱编辑中' : isThinking ? `思考中 ${aiProgress}%` : (game.turn==='red'?'红方走棋':'黑方走棋')}
           </span>
         </div>
 
@@ -532,13 +410,11 @@ export default function App() {
         </button>
       </div>
 
-      {/* PROGRESS BAR */}
       <div className="h-1 bg-amber-100 shrink-0">
         <div className="h-full bg-red-500 transition-all duration-300"
           style={{ width: isThinking ? `${aiProgress}%` : '0%' }} />
       </div>
 
-      {/* VIOLATION BANNER */}
       {violationBanner && !isEditMode && (
         <div className={cn(
           "px-4 py-2 text-center text-xs font-bold shrink-0",
@@ -550,7 +426,6 @@ export default function App() {
         </div>
       )}
 
-      {/* OPPONENT STRIP */}
       {!isEditMode && (
         <div className="flex items-center justify-between px-4 py-1.5 bg-white border-b border-amber-100 shrink-0">
           <div className="flex items-center gap-2">
@@ -561,12 +436,11 @@ export default function App() {
         </div>
       )}
 
-      {/* BOARD */}
       <div className="flex-1 flex items-center justify-center py-1 px-2 min-h-0">
         <div className="relative flex items-center justify-center w-full h-full">
           <Board
             game={game}
-            playerColor={isEditMode ? 'both' : boardPlayerColor()}
+            playerColor={boardPlayerColor()}
             onMove={handleMove}
             boardTheme={boardTheme}
             pieceTheme={pieceTheme}
@@ -575,6 +449,7 @@ export default function App() {
             onSquareClickOverride={activeCheat!=='none'?handleCheatAction:undefined}
             hintMove={hintMove}
             forbiddenMoves={currentForbiddenMoves}
+            selectedEditPos={selectedEditPos}
           />
           {gameOver && !isEditMode && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center rounded z-50">
@@ -584,8 +459,13 @@ export default function App() {
                 <div className="flex gap-2">
                   <button onClick={restartGame}
                     className="flex-1 py-3 bg-red-700 text-yellow-200 rounded-xl font-bold text-base shadow">再来一局</button>
-                  <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
-                    className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-600 rounded-xl text-base font-medium">主菜单</button>
+                  <button onClick={()=>{ 
+                      if (mode === 'custom') { setMode('edit'); setGameOver(null); } 
+                      else { resetWorkers(); setMode('menu'); }
+                    }}
+                    className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-600 rounded-xl text-base font-medium">
+                    {mode === 'custom' ? '继续编辑' : '主菜单'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -593,7 +473,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* MY STRIP */}
       {!isEditMode && (
         <div className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-amber-100 shrink-0">
           <div className="flex items-center gap-2">
@@ -611,16 +490,23 @@ export default function App() {
         </div>
       )}
 
-      {/* BOTTOM BAR */}
       <div className="bg-white border-t border-amber-200 shadow-sm shrink-0">
         <div className="flex items-stretch gap-2 px-3 py-2.5">
 
-          <button onClick={handleUndo}
-            disabled={(isEditMode ? editHistory.length===0 : game.history.length===0) || isThinking}
-            className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
-            <RotateCcw className="w-4 h-4" />
-            {isEditMode ? '撤销' : '悔棋'}
-          </button>
+          {isEditMode ? (
+             <button onClick={()=>setIsFlipped(!isFlipped)}
+               className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium active:scale-95 transition-all">
+               <FlipVertical className="w-4 h-4" />
+               翻转
+             </button>
+          ) : (
+            <button onClick={handleUndo}
+              disabled={game.history.length===0 || isThinking}
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-30 active:scale-95 transition-all">
+              <RotateCcw className="w-4 h-4" />
+              悔棋
+            </button>
+          )}
 
           {!isEditMode && (
             <button onClick={restartGame} disabled={isThinking}
@@ -645,7 +531,7 @@ export default function App() {
             <button onClick={finishEdit}
               className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 border border-blue-600 text-white rounded-xl text-sm font-bold active:scale-95 transition-all shadow">
               <CheckCheck className="w-4 h-4" />
-              开始对局
+              对局设置
             </button>
           )}
 
@@ -653,7 +539,7 @@ export default function App() {
             className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-2.5 border rounded-xl text-sm font-medium transition-all active:scale-95",
               drawerOpen ? "bg-amber-100 border-amber-400 text-amber-800" : "bg-gray-100 hover:bg-gray-200 border-gray-200 text-gray-700")}>
             {drawerOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-            {isEditMode ? '编辑' : '秘籍'}
+            {isEditMode ? '工具栏' : '秘籍'}
           </button>
         </div>
 
@@ -663,6 +549,8 @@ export default function App() {
               <EditDrawer
                 editPiece={editPiece}
                 setEditPiece={setEditPiece}
+                undoHistoryEmpty={editHistory.length === 0}
+                onUndo={handleUndo}
                 onReset={()=>{ setEditHistory(p=>[...p,game]); setGame(new Xiangqi()); }}
                 onClear={()=>{
                   const g = game.clone();
@@ -698,10 +586,12 @@ export default function App() {
   );
 }
 
-// ── EditDrawer ────────────────────────────────────────────────────
-function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
+// ── EditDrawer (撤销已移入此组件的首行) ──────────────────────────
+function EditDrawer({ editPiece, setEditPiece, undoHistoryEmpty, onUndo, onReset, onClear }: {
   editPiece: Piece | 'eraser' | null;
   setEditPiece: (p: Piece | 'eraser' | null) => void;
+  undoHistoryEmpty: boolean;
+  onUndo: () => void;
   onReset: () => void;
   onClear: () => void;
 }) {
@@ -709,15 +599,19 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
+        <button onClick={onUndo} disabled={undoHistoryEmpty}
+          className="flex-1 flex items-center justify-center gap-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-medium hover:bg-gray-50 active:scale-95 transition-all disabled:opacity-30">
+          <RotateCcw className="w-3 h-3"/>撤销
+        </button>
         <button onClick={onReset}
           className="flex-1 flex items-center justify-center gap-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-medium hover:bg-gray-50 active:scale-95 transition-all">
-          <RefreshCw className="w-3 h-3"/>初始局面
+          <RefreshCwIcon className="w-3 h-3"/>初始局面
         </button>
         <button onClick={onClear}
           className="flex-1 flex items-center justify-center gap-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-medium hover:bg-gray-50 active:scale-95 transition-all">
           <Trash2 className="w-3 h-3"/>清空棋盘
         </button>
-        <button onClick={()=>setEditPiece('eraser')}
+        <button onClick={()=>setEditPiece(editPiece==='eraser'?null:'eraser')}
           className={cn("flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium border-2 transition-all active:scale-95",
             editPiece==='eraser'?"border-orange-400 bg-orange-100 text-orange-700 shadow":"border-gray-200 bg-white text-gray-500 hover:bg-gray-50")}>
           <Eraser className="w-3 h-3"/>消除
@@ -726,7 +620,7 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
       <div>
         <div className="flex gap-1.5">
           {(['k','a','e','h','r','c','p'] as const).map(type=>(
-            <button key={`r-${type}`} onClick={()=>setEditPiece({id:`${type}_red`,type,color:'red'})}
+            <button key={`r-${type}`} onClick={()=>setEditPiece(ep?.type===type && ep?.color==='red' ? null : {id:`${type}_red`,type,color:'red'})}
               className={cn("flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all",
                 editPiece!=='eraser' && ep?.type===type && ep?.color==='red'
                   ?"border-red-700 bg-red-700 text-yellow-200 scale-110 shadow"
@@ -739,7 +633,7 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
       <div>
         <div className="flex gap-1.5">
           {(['k','a','e','h','r','c','p'] as const).map(type=>(
-            <button key={`b-${type}`} onClick={()=>setEditPiece({id:`${type}_black`,type,color:'black'})}
+            <button key={`b-${type}`} onClick={()=>setEditPiece(ep?.type===type && ep?.color==='black' ? null : {id:`${type}_black`,type,color:'black'})}
               className={cn("flex-1 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all",
                 editPiece!=='eraser' && ep?.type===type && ep?.color==='black'
                   ?"border-gray-800 bg-gray-800 text-white scale-110 shadow"

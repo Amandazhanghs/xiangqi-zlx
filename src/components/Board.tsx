@@ -257,16 +257,15 @@ export function Board({
           <>
             <defs>
              <marker
-  id="hint-arrowhead"
-  markerWidth="10"    // 宽度不变（尖端到左边缘距离仍为 8）
-  markerHeight="5"    // 从 6 改为 5，因为三角形上下范围缩小了
-  refX="8"            // 尖端 x 坐标
-  refY="3"            // 尖端 y 坐标（保持不变）
-  orient="auto"
->
-  <path d="M0,2 L8,3 L0,4 Z" fill="rgba(22,163,74,0.95)" />
-</marker>
-              </marker>
+                id="hint-arrowhead"
+                markerWidth="10"    // 宽度不变（尖端到左边缘距离仍为 8）
+                markerHeight="5"    // 从 6 改为 5，因为三角形上下范围缩小了
+                refX="8"            // 尖端 x 坐标
+                refY="3"            // 尖端 y 坐标（保持不变）
+                orient="auto"
+            >
+              <path d="M0,2 L8,3 L0,4 Z" fill="rgba(22,163,74,0.95)" />
+            </marker>
             </defs>
             <line
               x1={arrow.x1} y1={arrow.y1}

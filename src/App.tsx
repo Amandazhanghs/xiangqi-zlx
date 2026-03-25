@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Board, BoardTheme, PieceTheme } from './components/Board';
-import { Xiangqi, Move, Piece } from './game/xiangqi';
+import { Xiangqi, Move, Piece, RepetitionViolation } from './game/xiangqi';
 // @ts-ignore
 import AiWorker from './game/aiWorker?worker';
 import {
@@ -47,7 +47,10 @@ export default function App() {
   const [hintMove, setHintMove] = useState<Move | null>(null);
   const [isHinting, setIsHinting] = useState(false);
 
-  // Setup screen state (saved when user clicks "开始对局" in edit)
+  // Active repetition violation — null means no current violation
+  const [repetitionViolation, setRepetitionViolation] = useState<RepetitionViolation | null>(null);
+
+  // Setup screen state
   const [setupGame, setSetupGame] = useState<Xiangqi | null>(null);
   const [customConfig, setCustomConfig] = useState<CustomGameConfig>({
     redPlayer: 'human',
@@ -58,9 +61,6 @@ export default function App() {
   const workerRef = useRef<Worker | null>(null);
   const hintWorkerRef = useRef<Worker | null>(null);
 
-  // ── Kill & recreate workers ─────────────────────────────────────
-  // Must be called whenever the user navigates away while AI is thinking,
-  // so the old worker cannot fire stale results into a new game.
   const resetWorkers = () => {
     workerRef.current?.terminate();
     hintWorkerRef.current?.terminate();
@@ -94,13 +94,29 @@ export default function App() {
     return false;
   };
 
+  // Check for game-over and repetition violations after every game state change
   useEffect(() => {
     if (mode !== 'edit' && mode !== 'setup') {
       const winner = game.getWinner();
-      if (winner) setGameOver(winner === 'draw' ? '和棋！' : `${winner === 'red' ? '红方' : '黑方'} 胜！`);
+      if (winner) {
+        setGameOver(winner === 'draw' ? '和棋！' : `${winner === 'red' ? '红方' : '黑方'} 胜！`);
+        setRepetitionViolation(null);
+        return;
+      }
+      // Check for perpetual check/chase at 3+ repetitions
+      const violation = game.getRepetitionViolation();
+      setRepetitionViolation(violation);
     }
   }, [game, mode]);
 
+  // Forbidden moves for the current turn's player (from repetition violation)
+  const currentForbiddenMoves: Move[] = (() => {
+    if (!repetitionViolation) return [];
+    if (repetitionViolation.violator === game.turn) return repetitionViolation.forbiddenMoves;
+    return [];
+  })();
+
+  // AI move effect — pass forbidden moves so AI doesn't repeat the violation
   useEffect(() => {
     let isCancelled = false;
     const shouldAiMove = (mode === 'ai' || mode === 'custom') && isAiTurn() && !game.isGameOver();
@@ -108,6 +124,12 @@ export default function App() {
       setIsThinking(true);
       setAiProgress(0);
       setHintMove(null);
+
+      // Forbidden moves for the AI (if it's the violator)
+      const aiForbidden = repetitionViolation && repetitionViolation.violator === game.turn
+        ? repetitionViolation.forbiddenMoves
+        : [];
+
       if (workerRef.current) {
         workerRef.current.onmessage = (e) => {
           if (isCancelled) return;
@@ -128,14 +150,17 @@ export default function App() {
           }
         };
         workerRef.current.postMessage({
-          board: game.board, turn: game.turn,
-          history: game.history, capturedPieces: game.capturedPieces,
-          difficulty: aiDifficulty
+          board: game.board,
+          turn: game.turn,
+          history: game.history,
+          capturedPieces: game.capturedPieces,
+          difficulty: aiDifficulty,
+          forbiddenMoves: aiForbidden,
         });
       }
     }
     return () => { isCancelled = true; };
-  }, [game, mode, aiColors, playerColor, aiDifficulty]);
+  }, [game, mode, aiColors, playerColor, aiDifficulty, repetitionViolation]);
 
   const handleHint = () => {
     if (isHinting || isThinking) return;
@@ -148,7 +173,8 @@ export default function App() {
       hintWorkerRef.current.postMessage({
         board: game.board, turn: game.turn,
         history: game.history, capturedPieces: game.capturedPieces,
-        difficulty: hintDifficulty
+        difficulty: hintDifficulty,
+        forbiddenMoves: currentForbiddenMoves,
       });
     }
   };
@@ -220,6 +246,7 @@ export default function App() {
 
   const handleUndo = () => {
     setHintMove(null);
+    setRepetitionViolation(null);
     if (mode === 'edit') {
       if (editHistory.length > 0) { setGame(editHistory[editHistory.length-1]); setEditHistory(p=>p.slice(0,-1)); }
     } else {
@@ -238,18 +265,19 @@ export default function App() {
     resetWorkers();
     setMode('local'); setPlayerColor('both'); setGame(new Xiangqi());
     setGameOver(null); setIsCheatModeUnlocked(false); setActiveCheat('none');
-    setDrawerOpen(false); setAiColors(new Set());
+    setDrawerOpen(false); setAiColors(new Set()); setRepetitionViolation(null);
   };
 
   const startAI = (color: 'red'|'black') => {
     resetWorkers();
     setMode('ai'); setPlayerColor(color); setGame(new Xiangqi());
     setGameOver(null); setIsCheatModeUnlocked(false); setActiveCheat('none');
-    setDrawerOpen(false);
+    setDrawerOpen(false); setRepetitionViolation(null);
   };
 
   const restartGame = () => {
     setGameOver(null);
+    setRepetitionViolation(null);
     if (mode === 'ai') startAI(playerColor as 'red'|'black');
     else if (mode === 'local') startLocal();
     else if (mode === 'custom' && setupGame) launchCustomGame(customConfig, setupGame);
@@ -271,6 +299,7 @@ export default function App() {
     setActiveCheat('none');
     setDrawerOpen(false);
     setHintMove(null);
+    setRepetitionViolation(null);
     resetWorkers();
     setMode('custom');
   };
@@ -283,9 +312,9 @@ export default function App() {
     g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});
     setGame(g); setEditHistory([]); setEditPiece(null); setGameOver(null);
     setIsCheatModeUnlocked(false); setActiveCheat('none'); setDrawerOpen(false);
+    setRepetitionViolation(null);
   };
 
-  // Edit done → go to setup screen
   const finishEdit = () => {
     setSetupGame(game.clone());
     setCustomConfig({ redPlayer: 'human', blackPlayer: 'ai', firstMove: 'red' });
@@ -315,6 +344,16 @@ export default function App() {
 
   const isEditMode = mode === 'edit';
   const SERIF: React.CSSProperties = { fontFamily: "'Noto Serif SC', 'STKaiti', 'KaiTi', serif" };
+
+  // Violation banner text
+  const violationBanner = (() => {
+    if (!repetitionViolation) return null;
+    const who = repetitionViolation.violator === 'red' ? '红方' : '黑方';
+    const reason = repetitionViolation.reason === 'perpetualCheck' ? '长将' : '长捉';
+    const isCurrentTurn = repetitionViolation.violator === game.turn;
+    if (isCurrentTurn) return `${who}${reason}，必须变着！`;
+    return `检测到${who}${reason}，等待变着`;
+  })();
 
   // ═══════════════════════════════════════════
   // MENU
@@ -378,8 +417,6 @@ export default function App() {
             <div className="text-blue-200 text-sm">配置打谱局面的对弈方式</div>
           </div>
           <div className="p-5 space-y-4">
-
-            {/* First move */}
             <div className="rounded-2xl border border-gray-200 overflow-hidden">
               <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-200">
                 <span className="font-bold text-gray-700 text-sm">先手方（谁先走棋）</span>
@@ -387,22 +424,16 @@ export default function App() {
               <div className="p-3 grid grid-cols-2 gap-2">
                 <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'red'}))}
                   className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
-                    customConfig.firstMove==='red'
-                      ? 'border-red-600 bg-red-600 text-white shadow'
-                      : 'border-red-200 bg-red-50 text-red-600')}>
+                    customConfig.firstMove==='red' ? 'border-red-600 bg-red-600 text-white shadow' : 'border-red-200 bg-red-50 text-red-600')}>
                   🔴 红方先走
                 </button>
                 <button onClick={()=>setCustomConfig(p=>({...p,firstMove:'black'}))}
                   className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2",
-                    customConfig.firstMove==='black'
-                      ? 'border-gray-800 bg-gray-800 text-white shadow'
-                      : 'border-gray-300 bg-gray-50 text-gray-700')}>
+                    customConfig.firstMove==='black' ? 'border-gray-800 bg-gray-800 text-white shadow' : 'border-gray-300 bg-gray-50 text-gray-700')}>
                   ⚫ 黑方先走
                 </button>
               </div>
             </div>
-
-            {/* Red player */}
             <div className="rounded-2xl border border-red-200 overflow-hidden">
               <div className="bg-red-50 px-4 py-2.5 border-b border-red-200 flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full bg-red-600 shrink-0"/>
@@ -412,16 +443,12 @@ export default function App() {
                 {(['human','ai'] as const).map(v => (
                   <button key={v} onClick={()=>setCustomConfig(p=>({...p,redPlayer:v}))}
                     className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
-                      customConfig.redPlayer===v
-                        ? 'border-red-600 bg-red-600 text-white shadow'
-                        : 'border-red-200 bg-white text-red-600 hover:bg-red-50')}>
+                      customConfig.redPlayer===v ? 'border-red-600 bg-red-600 text-white shadow' : 'border-red-200 bg-white text-red-600 hover:bg-red-50')}>
                     {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
                   </button>
                 ))}
               </div>
             </div>
-
-            {/* Black player */}
             <div className="rounded-2xl border border-gray-300 overflow-hidden">
               <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-300 flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full bg-gray-800 shrink-0"/>
@@ -431,23 +458,18 @@ export default function App() {
                 {(['human','ai'] as const).map(v => (
                   <button key={v} onClick={()=>setCustomConfig(p=>({...p,blackPlayer:v}))}
                     className={cn("py-3 rounded-xl font-bold text-sm transition-all border-2 active:scale-95",
-                      customConfig.blackPlayer===v
-                        ? 'border-gray-700 bg-gray-700 text-white shadow'
-                        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50')}>
+                      customConfig.blackPlayer===v ? 'border-gray-700 bg-gray-700 text-white shadow' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50')}>
                     {v==='human' ? '👤 人类玩家' : '🤖 电脑AI'}
                   </button>
                 ))}
               </div>
             </div>
-
-            {/* Summary */}
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">
               <span className="font-bold">对局预览：</span>
               {customConfig.firstMove==='red'?'红':'黑'}方先走 ·
               红={customConfig.redPlayer==='ai'?'电脑':'人类'} ·
               黑={customConfig.blackPlayer==='ai'?'电脑':'人类'}
             </div>
-
             <div className="flex gap-3 pt-1">
               <button onClick={() => {
                         if (setupGame) {
@@ -459,7 +481,7 @@ export default function App() {
                         } else {
                           startEdit();
                         }
-                      }}            
+                      }}
                 className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border border-gray-200 active:scale-95 transition-all">
                 <ArrowLeft className="w-4 h-4"/>返回编辑
               </button>
@@ -484,7 +506,6 @@ export default function App() {
 
       {/* TOP BAR */}
       <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-amber-200 shadow-sm shrink-0">
-        {/* Back button — resets workers before returning to menu */}
         <button onClick={()=>{ resetWorkers(); setMode('menu'); }}
           className="flex items-center gap-1.5 text-gray-600 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all">
           <ArrowLeft className="w-4 h-4" />
@@ -517,6 +538,18 @@ export default function App() {
           style={{ width: isThinking ? `${aiProgress}%` : '0%' }} />
       </div>
 
+      {/* VIOLATION BANNER */}
+      {violationBanner && !isEditMode && (
+        <div className={cn(
+          "px-4 py-2 text-center text-xs font-bold shrink-0",
+          repetitionViolation?.violator === game.turn
+            ? "bg-orange-100 border-b border-orange-300 text-orange-800"
+            : "bg-yellow-50 border-b border-yellow-200 text-yellow-700"
+        )}>
+          ⚠️ {violationBanner}
+        </div>
+      )}
+
       {/* OPPONENT STRIP */}
       {!isEditMode && (
         <div className="flex items-center justify-between px-4 py-1.5 bg-white border-b border-amber-100 shrink-0">
@@ -541,6 +574,7 @@ export default function App() {
             onEditClick={handleEditClick}
             onSquareClickOverride={activeCheat!=='none'?handleCheatAction:undefined}
             hintMove={hintMove}
+            forbiddenMoves={currentForbiddenMoves}
           />
           {gameOver && !isEditMode && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center rounded z-50">
@@ -674,7 +708,6 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear }: {
   const ep = editPiece !== 'eraser' ? editPiece as Piece | null : null;
   return (
     <div className="space-y-3">
-      {/* Three tool buttons on one row */}
       <div className="flex gap-2">
         <button onClick={onReset}
           className="flex-1 flex items-center justify-center gap-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-medium hover:bg-gray-50 active:scale-95 transition-all">

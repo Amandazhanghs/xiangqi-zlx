@@ -449,7 +449,17 @@ export default function App() {
             </div>
 
             <div className="flex gap-3 pt-1">
-              <button onClick={startEdit}
+              <button onClick={() => {
+                        if (setupGame) {
+                          setGame(setupGame.clone());
+                          setEditHistory([]);
+                          setEditPiece(null);
+                          setGameOver(null);
+                          setMode('edit');
+                        } else {
+                          startEdit();
+                        }
+                      }}            
                 className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border border-gray-200 active:scale-95 transition-all">
                 <ArrowLeft className="w-4 h-4"/>返回编辑
               </button>

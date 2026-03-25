@@ -67,17 +67,17 @@ export class Xiangqi {
   }
 
   private _hasOffensivePieces(color: PieceColor): boolean {
-  const offensiveTypes: PieceType[] = ['r', 'h', 'c', 'p'];
-  for (let r = 0; r < 10; r++) {
-    for (let c = 0; c < 9; c++) {
-      const p = this.board[r][c];
-      if (p && p.color === color && offensiveTypes.includes(p.type)) {
-        return true;
+    const offensiveTypes: PieceType[] = ['r', 'h', 'c', 'p'];
+    for (let r = 0; r < 10; r++) {
+      for (let c = 0; c < 9; c++) {
+        const p = this.board[r][c];
+        if (p && p.color === color && offensiveTypes.includes(p.type)) {
+          return true;
+        }
       }
     }
+    return false;
   }
-  return false;
-}
 
   initBoard() {
     const initialFen = [
@@ -331,8 +331,6 @@ export class Xiangqi {
   }
 
   // ── Detect which opponent pieces a given move directly threatens (attacks) ──
-  // Returns set of piece IDs that are under direct attack after this move.
-  // Used for perpetual chase detection.
   getAttackedPieceIds(color: PieceColor): Set<string> {
     const oppColor = color === 'red' ? 'black' : 'red';
     const attacked = new Set<string>();
@@ -340,7 +338,6 @@ export class Xiangqi {
       for (let c = 0; c < 9; c++) {
         const p = this.getPiece(r, c);
         if (!p || p.color !== color) continue;
-        // Get pseudo-legal captures (no need to filter for king safety here)
         const moves = this._getPseudoCaptures(r, c);
         for (const m of moves) {
           const target = this.getPiece(m.to.r, m.to.c);
@@ -353,7 +350,6 @@ export class Xiangqi {
     return attacked;
   }
 
-  // Pseudo-legal capture moves for a piece (doesn't filter leaving king in check)
   private _getPseudoCaptures(r: number, c: number): Move[] {
     const piece = this.getPiece(r, c);
     if (!piece) return [];
@@ -417,16 +413,15 @@ export class Xiangqi {
     }
     return moves;
   }
-  
+
   isDrawByNoOffensivePieces(): boolean {
     return !this._hasOffensivePieces('red') && !this._hasOffensivePieces('black');
   }
-  // ── Draw by 120 half-moves without capture ───────────────────────
+
   isDrawBy120(): boolean {
     return this.movesSinceCapture >= 120;
   }
 
-  // ── Draw by position repetition (5 times) ───────────────────────
   isDrawByRepetition5(): boolean {
     const key = boardKey(this.board, this.turn);
     return (this.positionHistory.get(key) ?? 0) >= 5;
@@ -435,22 +430,12 @@ export class Xiangqi {
   // ─────────────────────────────────────────────────────────────────
   // PERPETUAL CHECK / CHASE DETECTION
   //
-  // Algorithm:
-  //  1. Look back through history for a repeating cycle (period 2 or 4).
-  //  2. For a cycle of period P to qualify:
-  //     - The same position has appeared 3+ times.
-  //     - One player consistently gives check OR chases (threatens a non-king
-  //       piece that they weren't threatening in the position P steps before).
-  //  3. Returns which color is the violator and which of their moves to forbid.
+  // Fires at 3 occurrences of the same position (before the 5-repetition draw).
+  // Returns the violator color and which moves are forbidden.
   // ─────────────────────────────────────────────────────────────────
   getRepetitionViolation(): RepetitionViolation | null {
-    // Need at least 6 board key entries (initial + 6 moves = 7 entries)
-    // boardKeyHistory[i] is the key BEFORE history[i] was played
-    // So if we have N moves, boardKeyHistory has N entries (keys before each move)
-    // Plus the current position key.
-    const hLen = this.history.length;
-
     const currentKey = boardKey(this.board, this.turn);
+    // Need at least 3 occurrences of this position
     if ((this.positionHistory.get(currentKey) ?? 0) < 3) return null;
 
     // Try period 2 and period 4
@@ -463,58 +448,32 @@ export class Xiangqi {
 
   private _checkPerpetualForPeriod(period: number): RepetitionViolation | null {
     const hLen = this.history.length;
-    if (hLen < period * 3) return null;
+    // Need at least 2*period moves to have two full cycles
+    if (hLen < period * 2) return null;
 
-    // Check that current position matches position `period` steps back
     const currentKey = boardKey(this.board, this.turn);
 
-    // We need 3 occurrences of the same position with period `period`
-    // Positions at steps: current(0), -period, -2*period
-    // Verify by checking boardKeyHistory
-    // boardKeyHistory[i] = key before history[i] was made
-
-    // After hLen moves, current board is the state AFTER all moves.
-    // boardKeyHistory[hLen - k] = key before the k-th-to-last move
-    // We want: position after (hLen) moves = position after (hLen - period) moves
-    //          = position after (hLen - 2*period) moves
-    // But we don't store post-move keys directly... 
-    // Instead: current key = boardKeyHistory[hLen - period + ... ]
-    // 
-    // Actually: boardKeyHistory[i] = key before move i (0-indexed)
-    // Position AFTER move i = boardKeyHistory[i+1] (if it exists) = key before move i+1
-    // Current position = key after move hLen-1 = what we compute as currentKey
-    //
-    // Position period moves ago (after move hLen-1-period) = boardKeyHistory[hLen - period]
-    // Position 2*period moves ago = boardKeyHistory[hLen - 2*period]
-
+    // Position period moves ago = boardKeyHistory[hLen - period]
+    // (that entry is the key BEFORE move index hLen-period, which equals
+    //  the position AFTER move index hLen-period-1 = position period moves ago)
     if (hLen - period < 0 || hLen - 2 * period < 0) return null;
 
     const keyPeriodBack = this.boardKeyHistory[hLen - period];
     const key2PeriodBack = this.boardKeyHistory[hLen - 2 * period];
 
     if (!keyPeriodBack || !key2PeriodBack) return null;
+    // All three positions (current, -period, -2*period) must be identical
     if (currentKey !== keyPeriodBack || currentKey !== key2PeriodBack) return null;
 
-    // We have a cycle! Now determine who is the violator.
-    // The cycle consists of `period` moves that repeat.
-    // We need to check if one color is perpetually checking or chasing.
-
-    // Reconstruct the game states at each point in the last 2*period moves
-    // by replaying from 2*period moves back.
-    // Actually we need to replay the board to analyze.
-
-    // Simpler: replay from boardKeyHistory start + use clones
-    // Rebuild position at (hLen - 2*period) 
+    // We have a repeating cycle of length `period`.
+    // Replay the last 2*period moves and analyze each one.
     const stateAt2PBack = this._reconstructStateAt(hLen - 2 * period);
     if (!stateAt2PBack) return null;
 
-    // Replay the last 2*period moves and collect:
-    // - Did each move give check to opponent?
-    // - Did each move chase (newly attack) a non-king opponent piece?
     type MoveAnalysis = {
       color: PieceColor;
       givesCheck: boolean;
-      chasedPieceIds: Set<string>; // newly attacked pieces compared to before
+      chasedPieceIds: Set<string>;
     };
 
     const analyses: MoveAnalysis[] = [];
@@ -524,24 +483,20 @@ export class Xiangqi {
       const move = this.history[i];
       const movingColor = state.turn;
 
-      // Pieces attacked by movingColor BEFORE the move
       const attackedBefore = state.getAttackedPieceIds(movingColor);
 
       const nextState = state.clone();
       nextState.makeMove(move, true);
 
-      // Did this move give check?
       const oppColor: PieceColor = movingColor === 'red' ? 'black' : 'red';
       const givesCheck = nextState.isInCheck(oppColor);
 
-      // Pieces attacked by movingColor AFTER the move
       const attackedAfter = nextState.getAttackedPieceIds(movingColor);
 
-      // Newly chased = pieces now attacked that weren't before, excluding king
+      // Newly chased = pieces now attacked that weren't before, excluding kings
       const chasedPieceIds = new Set<string>();
       for (const id of attackedAfter) {
         if (!attackedBefore.has(id)) {
-          // Find the piece to check it's not a king
           let found = false;
           for (let r = 0; r < 10 && !found; r++) {
             for (let c = 0; c < 9 && !found; c++) {
@@ -559,42 +514,32 @@ export class Xiangqi {
       state = nextState;
     }
 
-    // Check if one player perpetually checks across the cycle
-    // The cycle has 2 players alternating. period moves per cycle.
-    // Player 0 makes moves at indices 0, 2, 4... (relative)
-    // Player 1 makes moves at indices 1, 3, 5... (relative)
-    
-    // For perpetual check: the same player checks in EVERY one of their turns
-    // in both repetitions of the cycle.
-    
-    // For perpetual chase: the same player chases the same piece(s) in EVERY
-    // one of their turns in both repetitions.
-
     const firstMoveColor = analyses[0].color;
     const secondMoveColor = analyses[1]?.color;
 
-    // Separate analyses by player
     const movesOfFirst = analyses.filter(a => a.color === firstMoveColor);
     const movesOfSecond = secondMoveColor ? analyses.filter(a => a.color === secondMoveColor) : [];
 
-    // Check perpetual check for first player
-    if (movesOfFirst.length >= 2 && movesOfFirst.every(a => a.givesCheck)) {
-      // Find which moves in the LAST period are the repeating moves
+    // Helper: build forbidden moves list from the LAST period's moves for a given color
+    const buildForbidden = (color: PieceColor): Move[] => {
       const lastPeriodStart = hLen - period;
-      const forbiddenMoves: Move[] = [];
+      const forbidden: Move[] = [];
       for (let i = lastPeriodStart; i < hLen; i++) {
-        if (this.history[i] && analyses[i - (hLen - 2 * period)].color === firstMoveColor) {
-          forbiddenMoves.push(this.history[i]);
+        if (analyses[i - (hLen - 2 * period)].color === color) {
+          forbidden.push(this.history[i]);
         }
       }
-      if (forbiddenMoves.length > 0) {
-        return { violator: firstMoveColor, reason: 'perpetualCheck', forbiddenMoves };
-      }
+      return forbidden;
+    };
+
+    // Check perpetual check — first player
+    if (movesOfFirst.length >= 2 && movesOfFirst.every(a => a.givesCheck)) {
+      const forbidden = buildForbidden(firstMoveColor);
+      if (forbidden.length > 0) return { violator: firstMoveColor, reason: 'perpetualCheck', forbiddenMoves: forbidden };
     }
 
-    // Check perpetual chase for first player
+    // Check perpetual chase — first player
     if (movesOfFirst.length >= 2) {
-      // Find piece IDs that are chased in ALL of first player's moves
       let commonChased: Set<string> | null = null;
       for (const a of movesOfFirst) {
         if (commonChased === null) {
@@ -606,34 +551,18 @@ export class Xiangqi {
         }
       }
       if (commonChased && commonChased.size > 0) {
-        const lastPeriodStart = hLen - period;
-        const forbiddenMoves: Move[] = [];
-        for (let i = lastPeriodStart; i < hLen; i++) {
-          if (analyses[i - (hLen - 2 * period)].color === firstMoveColor) {
-            forbiddenMoves.push(this.history[i]);
-          }
-        }
-        if (forbiddenMoves.length > 0) {
-          return { violator: firstMoveColor, reason: 'perpetualChase', forbiddenMoves };
-        }
+        const forbidden = buildForbidden(firstMoveColor);
+        if (forbidden.length > 0) return { violator: firstMoveColor, reason: 'perpetualChase', forbiddenMoves: forbidden };
       }
     }
 
-    // Check perpetual check for second player
+    // Check perpetual check — second player
     if (movesOfSecond.length >= 2 && movesOfSecond.every(a => a.givesCheck)) {
-      const lastPeriodStart = hLen - period;
-      const forbiddenMoves: Move[] = [];
-      for (let i = lastPeriodStart; i < hLen; i++) {
-        if (analyses[i - (hLen - 2 * period)].color === secondMoveColor) {
-          forbiddenMoves.push(this.history[i]);
-        }
-      }
-      if (forbiddenMoves.length > 0) {
-        return { violator: secondMoveColor!, reason: 'perpetualCheck', forbiddenMoves };
-      }
+      const forbidden = buildForbidden(secondMoveColor!);
+      if (forbidden.length > 0) return { violator: secondMoveColor!, reason: 'perpetualCheck', forbiddenMoves: forbidden };
     }
 
-    // Check perpetual chase for second player
+    // Check perpetual chase — second player
     if (movesOfSecond.length >= 2) {
       let commonChased: Set<string> | null = null;
       for (const a of movesOfSecond) {
@@ -646,33 +575,16 @@ export class Xiangqi {
         }
       }
       if (commonChased && commonChased.size > 0) {
-        const lastPeriodStart = hLen - period;
-        const forbiddenMoves: Move[] = [];
-        for (let i = lastPeriodStart; i < hLen; i++) {
-          if (analyses[i - (hLen - 2 * period)].color === secondMoveColor) {
-            forbiddenMoves.push(this.history[i]);
-          }
-        }
-        if (forbiddenMoves.length > 0) {
-          return { violator: secondMoveColor!, reason: 'perpetualChase', forbiddenMoves };
-        }
+        const forbidden = buildForbidden(secondMoveColor!);
+        if (forbidden.length > 0) return { violator: secondMoveColor!, reason: 'perpetualChase', forbiddenMoves: forbidden };
       }
     }
 
     return null;
   }
 
-  // Reconstruct game state at move index `targetIndex` (after that many moves)
   private _reconstructStateAt(targetIndex: number): Xiangqi | null {
     if (targetIndex < 0 || targetIndex > this.history.length) return null;
-    if (targetIndex === 0) {
-      // We can't easily reconstruct initial board without re-initializing...
-      // Use boardKeyHistory to go back: replay from initial board using history subset
-      // Re-create from scratch
-      const fresh = new Xiangqi();
-      // We need to replay only the first `targetIndex` moves — but 0 means initial
-      return fresh._replayMoves(this.history.slice(0, targetIndex));
-    }
     const fresh = new Xiangqi();
     return fresh._replayMoves(this.history.slice(0, targetIndex));
   }
@@ -701,11 +613,13 @@ export class Xiangqi {
     if (!redKing) return 'black';
     if (!blackKing) return 'red';
 
-    // Draw conditions
-      if (!this._hasOffensivePieces('red') && !this._hasOffensivePieces('black')) {
-    return 'draw';
-  }
+    if (!this._hasOffensivePieces('red') && !this._hasOffensivePieces('black')) return 'draw';
     if (this.isDrawBy120()) return 'draw';
+
+    // NOTE: isDrawByRepetition5 is intentionally NOT checked here.
+    // Repetition is handled via getRepetitionViolation() at 3 occurrences.
+    // The 5-repetition draw is only a last-resort fallback — if we reach 5
+    // repetitions without a violation being detected, declare draw.
     if (this.isDrawByRepetition5()) return 'draw';
 
     if (this.getAllValidMoves(this.turn).length === 0) {
@@ -723,7 +637,6 @@ export class Xiangqi {
     if (!piece) return false;
     if (!ignoreTurn && piece.color !== this.turn) return false;
 
-    // Save board key BEFORE this move
     const keyBefore = boardKey(this.board, this.turn);
 
     const target = this.board[move.to.r][move.to.c];
@@ -739,7 +652,6 @@ export class Xiangqi {
       this.history.push(move);
       this.boardKeyHistory.push(keyBefore);
 
-      // Update draw counters
       if (target) {
         this.movesSinceCapture = 0;
       } else {
@@ -747,8 +659,6 @@ export class Xiangqi {
       }
 
       this.turn = this.turn === 'red' ? 'black' : 'red';
-
-      // Record new position
       this._recordPosition();
     }
     return true;
@@ -758,7 +668,6 @@ export class Xiangqi {
     const move = this.history.pop();
     if (!move) return false;
 
-    // Remove current position from history
     this._removePosition();
 
     this.board[move.from.r][move.from.c] = this.board[move.to.r][move.to.c];
@@ -767,12 +676,10 @@ export class Xiangqi {
       this.capturedPieces.pop();
     }
 
-    // Restore boardKeyHistory
     this.boardKeyHistory.pop();
 
     this.turn = this.turn === 'red' ? 'black' : 'red';
 
-    // Recalculate movesSinceCapture by scanning back through history
     this.movesSinceCapture = 0;
     for (let i = this.history.length - 1; i >= 0; i--) {
       if (this.history[i].captured) break;
@@ -801,7 +708,6 @@ export class Xiangqi {
     }
   }
 
-  // Cheat methods
   applyCheatArmor(r: number, c: number) {
     const p = this.getPiece(r, c);
     if (p && p.type === 'p') p.isArmored = true;

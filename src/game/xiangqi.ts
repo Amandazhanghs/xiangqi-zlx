@@ -449,7 +449,6 @@ export class Xiangqi {
     // So if we have N moves, boardKeyHistory has N entries (keys before each move)
     // Plus the current position key.
     const hLen = this.history.length;
-    if (hLen < 6) return null;
 
     const currentKey = boardKey(this.board, this.turn);
     if ((this.positionHistory.get(currentKey) ?? 0) < 3) return null;

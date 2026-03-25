@@ -106,7 +106,76 @@ export function Board({
   };
   const lc = lineColor[boardTheme];
 
-  // Compute hint arrow pixel coordinates (center of from/to cells)
+  // ── Position marker helper ─────────────────────────────────────
+  // Draws the classic "corner bracket" marks at a board intersection.
+  // `cx/cy` = center of intersection in SVG coords.
+  // `arm`   = length of each bracket arm (≈ CS * 0.18).
+  // `gap`   = gap between bracket and line crossing (≈ CS * 0.08).
+  // Only draws brackets on the side(s) that have a board line.
+  const renderMarker = (cx: number, cy: number, arm: number, gap: number, sides: { top?: boolean; bottom?: boolean; left?: boolean; right?: boolean }) => {
+    const paths: string[] = [];
+    // top-left corner
+    if (sides.top && sides.left) {
+      paths.push(`M${cx - gap - arm},${cy - gap} L${cx - gap},${cy - gap} L${cx - gap},${cy - gap - arm}`);
+    }
+    // top-right corner
+    if (sides.top && sides.right) {
+      paths.push(`M${cx + gap + arm},${cy - gap} L${cx + gap},${cy - gap} L${cx + gap},${cy - gap - arm}`);
+    }
+    // bottom-left corner
+    if (sides.bottom && sides.left) {
+      paths.push(`M${cx - gap - arm},${cy + gap} L${cx - gap},${cy + gap} L${cx - gap},${cy + gap + arm}`);
+    }
+    // bottom-right corner
+    if (sides.bottom && sides.right) {
+      paths.push(`M${cx + gap + arm},${cy + gap} L${cx + gap},${cy + gap} L${cx + gap},${cy + gap + arm}`);
+    }
+    return paths.map((d, i) => (
+      <path key={i} d={d} stroke={lc} strokeWidth={1.2} fill="none" strokeLinecap="square" />
+    ));
+  };
+
+  // Build all position markers:
+  // Cannon positions: (2,1), (2,7), (7,1), (7,7)
+  // Soldier/pawn positions: (3,0),(3,2),(3,4),(3,6),(3,8), (6,0),(6,2),(6,4),(6,6),(6,8)
+  const buildMarkers = () => {
+    const markers: React.ReactNode[] = [];
+    const arm = CS * 0.17;
+    const gap = CS * 0.08;
+
+    const addMarker = (boardRow: number, boardCol: number) => {
+      const displayRow = isFlipped ? 9 - boardRow : boardRow;
+      const displayCol = isFlipped ? 8 - boardCol : boardCol;
+      const cx = displayCol * CS;
+      const cy = displayRow * CS;
+
+      // Determine which sides have board lines (edge columns/rows only have lines on one side)
+      const hasLeft = displayCol > 0;
+      const hasRight = displayCol < 8;
+      const hasTop = displayRow > 0;
+      const hasBottom = displayRow < 9;
+
+      markers.push(
+        <g key={`marker-${boardRow}-${boardCol}`}>
+          {renderMarker(cx, cy, arm, gap, { top: hasTop, bottom: hasBottom, left: hasLeft, right: hasRight })}
+        </g>
+      );
+    };
+
+    // Cannon positions (rows 2 and 7, cols 1 and 7)
+    addMarker(2, 1); addMarker(2, 7);
+    addMarker(7, 1); addMarker(7, 7);
+
+    // Soldier/pawn positions (rows 3 and 6, odd columns for center, all 5 columns)
+    [0, 2, 4, 6, 8].forEach(c => {
+      addMarker(3, c);
+      addMarker(6, c);
+    });
+
+    return markers;
+  };
+
+  // Hint arrow
   const getHintArrow = () => {
     if (!hintMove) return null;
     const fromR = isFlipped ? 9 - hintMove.from.r : hintMove.from.r;
@@ -124,19 +193,14 @@ export function Board({
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len === 0) return null;
 
-    // Shorten arrow slightly so it doesn't overlap piece centers completely
     const shrink = CS * 0.28;
     const ux = dx / len;
     const uy = dy / len;
-    const ax1 = x1 + ux * shrink;
-    const ay1 = y1 + uy * shrink;
-    const ax2 = x2 - ux * shrink;
-    const ay2 = y2 - uy * shrink;
 
-    return { x1: ax1, y1: ay1, x2: ax2, y2: ay2 };
+    return { x1: x1 + ux * shrink, y1: y1 + uy * shrink, x2: x2 - ux * shrink, y2: y2 - uy * shrink };
   };
 
-const arrow = getHintArrow();
+  const arrow = getHintArrow();
 
   return (
     <div
@@ -146,26 +210,53 @@ const arrow = getHintArrow();
       <svg width={BOARD_W} height={BOARD_H}
         className="absolute pointer-events-none"
         style={{ top: PAD, left: PAD }}>
-        
-        {/* ... 棋盘线代码保持不变 ... */}
 
-        {/* 优化后的 Hint arrow */}
+        {/* Board lines */}
+        {Array.from({ length: 10 }).map((_, i) => (
+          <line key={`h${i}`} x1={0} y1={i*CS} x2={BOARD_W} y2={i*CS} stroke={lc} strokeWidth={1.5} />
+        ))}
+        {Array.from({ length: 9 }).map((_, i) => (
+          <React.Fragment key={`v${i}`}>
+            <line x1={i*CS} y1={0} x2={i*CS} y2={CS*4} stroke={lc} strokeWidth={1.5} />
+            <line x1={i*CS} y1={CS*5} x2={i*CS} y2={BOARD_H} stroke={lc} strokeWidth={1.5} />
+          </React.Fragment>
+        ))}
+        <line x1={0} y1={CS*4} x2={0} y2={CS*5} stroke={lc} strokeWidth={1.5} />
+        <line x1={BOARD_W} y1={CS*4} x2={BOARD_W} y2={CS*5} stroke={lc} strokeWidth={1.5} />
+
+        {/* Palace diagonals */}
+        <line x1={CS*3} y1={0} x2={CS*5} y2={CS*2} stroke={lc} strokeWidth={1.5} />
+        <line x1={CS*5} y1={0} x2={CS*3} y2={CS*2} stroke={lc} strokeWidth={1.5} />
+        <line x1={CS*3} y1={CS*7} x2={CS*5} y2={CS*9} stroke={lc} strokeWidth={1.5} />
+        <line x1={CS*5} y1={CS*7} x2={CS*3} y2={CS*9} stroke={lc} strokeWidth={1.5} />
+
+        {/* River text */}
+        <text x={CS*2} y={CS*4.62} fill={lc} fontSize={CS*0.42}
+          fontFamily='"STKaiti","KaiTi","Kaiti SC",serif' textAnchor="middle">楚 河</text>
+        <text x={CS*6} y={CS*4.62} fill={lc} fontSize={CS*0.42}
+          fontFamily='"STKaiti","KaiTi","Kaiti SC",serif' textAnchor="middle">汉 界</text>
+
+        {/* Border */}
+        <rect x={0.5} y={0.5} width={BOARD_W-1} height={BOARD_H-1} fill="none" stroke={lc} strokeWidth={1.5} />
+
+        {/* Position markers (cannon & soldier spots) */}
+        {buildMarkers()}
+
+        {/* Hint arrow */}
         {arrow && (
           <>
             <defs>
-              {/* markerWidth 增加，markerHeight 减小，使其看起来更细长 */}
-              <marker 
-                id="hint-arrowhead" 
-                markerWidth="10" 
-                markerHeight="6" 
-                refX="9" 
-                refY="3" 
+              <marker
+                id="hint-arrowhead"
+                markerWidth="10"
+                markerHeight="6"
+                refX="9"
+                refY="3"
                 orient="auto"
               >
-                {/* 这里的路径 M0,1 L9,3 L0,5 Z 构成了一个更尖锐的三角形 */}
-                <path 
-                  d="M0,1.5 L8,3 L0,4.5 C0.5,3 0.5,3 0,1.5 Z" 
-                  fill="rgba(22,163,74,0.95)" 
+                <path
+                  d="M0,1.5 L8,3 L0,4.5 C0.5,3 0.5,3 0,1.5 Z"
+                  fill="rgba(22,163,74,0.95)"
                 />
               </marker>
             </defs>
@@ -173,11 +264,9 @@ const arrow = getHintArrow();
               x1={arrow.x1} y1={arrow.y1}
               x2={arrow.x2} y2={arrow.y2}
               stroke="rgba(22,163,74,0.8)"
-              // 这里的宽度从 0.13 降到了 0.07，让线条更纤细
-              strokeWidth={CS * 0.07} 
+              strokeWidth={CS * 0.07}
               strokeLinecap="round"
               markerEnd="url(#hint-arrowhead)"
-              // 减小阴影扩散范围
               style={{ filter: 'drop-shadow(0 0 2px rgba(22,163,74,0.4))' }}
             />
           </>

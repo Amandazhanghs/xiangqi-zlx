@@ -594,16 +594,15 @@ export default function App() {
         <div className="relative flex items-center justify-center w-full h-full">
           <Board
             game={game}
-            playerColor={isEditMode ? 'both' : boardPlayerColor()}
+            playerColor={isEditMode ? (isBoardFlipped ? 'black' : 'red') : boardPlayerColor()}
             onMove={handleMove}
             boardTheme={boardTheme}
             pieceTheme={pieceTheme}
             isEditMode={isEditMode}
-            onEditClick={handleEditClick}
+            onEditClick={(r, c) => handleEditClick(isBoardFlipped ? 9-r : r, isBoardFlipped ? 8-c : c)}
             onSquareClickOverride={activeCheat!=='none'?handleCheatAction:undefined}
             hintMove={hintMove}
             forbiddenMoves={currentForbiddenMoves}
-            flipped={isBoardFlipped}
           />
           {gameOver && !isEditMode && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center rounded z-50">

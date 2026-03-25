@@ -256,9 +256,19 @@ export function Board({
         {arrow && (
           <>
             <defs>
-             <marker id="hint-arrowhead" markerWidth="6" markerHeight="4" refX="3" refY="2" orient="auto">
-              <path d="M0,0 L0,4 L6,2 z" fill="rgba(22,163,74,0.92)" />
-             </marker>
+              <marker
+                id="hint-arrowhead"
+                markerWidth="10"
+                markerHeight="6"
+                refX="9"
+                refY="3"
+                orient="auto"
+              >
+                <path
+                  d="M0,1.5 L8,3 L0,4.5 C0.5,3 0.5,3 0,1.5 Z"
+                  fill="rgba(22,163,74,0.95)"
+                />
+              </marker>
             </defs>
             <line
               x1={arrow.x1} y1={arrow.y1}

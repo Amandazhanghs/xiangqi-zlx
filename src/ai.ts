@@ -136,6 +136,9 @@ const STYLES: Record<string, StyleWeights> = {
   '进兵流':   { cannonCenterBonus: 8,  knightMobilityBonus: 10, chariotRushBonus: 8,  elephantDefenseBonus: 8,  pawnAggression: 30, styleTag: '进兵流'   },
   '车马炮':   { cannonCenterBonus: 16, knightMobilityBonus: 16, chariotRushBonus: 22, elephantDefenseBonus: 5,  pawnAggression: 10, styleTag: '车马炮'   },
   '仙人指路': { cannonCenterBonus: 10, knightMobilityBonus: 14, chariotRushBonus: 10, elephantDefenseBonus: 10, pawnAggression: 22, styleTag: '仙人指路' },
+  // 对兵流：对手仙人指路时，互挺中兵或平炮打兵，不急于中炮
+  // 高兵前进奖励 + 炮侧翼位奖励（平炮打兵），抑制中炮冲动
+  '对兵流':   { cannonCenterBonus: 4,  knightMobilityBonus: 12, chariotRushBonus: 12, elephantDefenseBonus: 8,  pawnAggression: 32, styleTag: '对兵流'   },
 };
 
 /**
@@ -150,7 +153,8 @@ function detectOpponentStyle(game: Xiangqi, myColor: PieceColor): string {
 
   let oppCannonCenter = false;
   let oppKnightOut = 0;
-  let oppPawnAdvance = false;
+  let oppCenterPawnAdvanced = false;  // 对手挺中兵（仙人指路特征）
+  let oppSidePawnAdvanced = false;    // 对手挺边兵（三/七路兵）
   let oppElephantCenter = false;
 
   for (const h of oppMoves) {
@@ -165,29 +169,34 @@ function detectOpponentStyle(game: Xiangqi, myColor: PieceColor): string {
     if (piece.type === 'p') {
       const startR = oppColor === 'red' ? 6 : 3;
       const adv = oppColor === 'red' ? startR - to.r : to.r - startR;
-      if (adv > 0) oppPawnAdvance = true;
+      if (adv > 0) {
+        if (to.c === 4) oppCenterPawnAdvanced = true;       // 中兵前进 = 仙人指路
+        if (to.c === 2 || to.c === 6) oppSidePawnAdvanced = true; // 三/七路兵
+      }
     }
     if (piece.type === 'e') {
-      // 中象：红方 row7 col4，黑方 row2 col4
       if (to.c === 4 && (to.r === 7 || to.r === 2)) oppElephantCenter = true;
     }
   }
 
-  // 克制逻辑
+  // ── 仙人指路识别：对手挺中兵且未出炮 ──────────────────────────
+  // 应对：对兵流（互挺兵）或平炮打兵，明确抑制中炮冲动
+  if (oppCenterPawnAdvanced && !oppCannonCenter) {
+    return '对兵流';
+  }
+
+  // ── 克制逻辑 ────────────────────────────────────────────────────
   if (oppCannonCenter) {
-    // 对手中炮 → 飞相流（飞中象防守）或起马流（马制炮）
     return Math.random() < 0.55 ? '飞相流' : '起马流';
   }
   if (oppKnightOut >= 2) {
-    // 对手双马 → 进兵流（挺兵牵马腿）或中炮流
     return Math.random() < 0.5 ? '进兵流' : '中炮流';
   }
-  if (oppPawnAdvance && !oppCannonCenter) {
-    // 对手挺兵 → 中炮或起马快速反制
-    return Math.random() < 0.5 ? '中炮流' : '起马流';
+  if (oppSidePawnAdvanced && !oppCannonCenter) {
+    // 对手挺边兵 → 进兵流对抗或中炮反制
+    return Math.random() < 0.5 ? '进兵流' : '中炮流';
   }
   if (oppElephantCenter) {
-    // 对手飞中象守势 → 积极进攻
     return Math.random() < 0.5 ? '车马炮' : '中炮流';
   }
 
@@ -334,6 +343,11 @@ function computeSideOpeningBonus(game: Xiangqi, color: PieceColor, style: StyleW
         if (r !== backRank) bonus += 10;
         // 炮二路/八路护马也有价值（中炮流以外）
         if ((c === 1 || c === 7) && style.styleTag !== '中炮流') bonus += 6;
+        // 对兵流：炮平到侧翼（二/八路）准备打兵，不走中路
+        if (style.styleTag === '对兵流') {
+          if (c === 1 || c === 7) bonus += 20; // 强奖励侧翼炮位
+          if (c === 4) bonus -= 20;             // 显式抑制中炮（叠加cannonCenterBonus=4，净分很低）
+        }
       }
 
       // ── 马 ──────────────────────────────────────────────────────
@@ -392,6 +406,11 @@ function computeSideOpeningBonus(game: Xiangqi, color: PieceColor, style: StyleW
           if (style.styleTag === '仙人指路' && c === 4 && advancement > 0) {
             bonus += 12 * advancement;
           }
+        }
+        // 对兵流专项：强奖励中兵前进（互挺兵），三/七路兵也有加分
+        if (style.styleTag === '对兵流') {
+          if (c === 4 && advancement > 0) bonus += 28 * advancement; // 中兵互挺
+          if ((c === 2 || c === 6) && advancement > 0) bonus += 14 * advancement; // 侧兵配合
         }
       }
     }
@@ -825,8 +844,8 @@ export function getBestMove(
     for (let f = 0; f < 90; f++)
       history[c2][f].fill(0);
 
-  const maxDepthMap: Record<number, number> = { 1: 2, 2: 4, 3: 6, 4: 8, 5: 10 };
-  const timeLimitMap: Record<number, number> = { 1: 800, 2: 2000, 3: 4000, 4: 8000, 5: 16000 };
+  const maxDepthMap: Record<number, number> = { 1: 2, 2: 3, 3: 4, 4: 6, 5: 8 };
+  const timeLimitMap: Record<number, number> = { 1: 500, 2: 1200, 3: 2500, 4: 5000, 5: 9000 };
   const maxDepth = maxDepthMap[difficulty] ?? 5;
   const timeLimit = timeLimitMap[difficulty] ?? 4000;
   const t0 = Date.now();

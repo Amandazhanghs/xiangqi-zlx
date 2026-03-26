@@ -16,7 +16,6 @@ function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
 }
 
-// 'setup' = post-edit game configuration screen
 type GameMode = 'menu' | 'ai' | 'local' | 'edit' | 'setup' | 'custom';
 
 interface CustomGameConfig {
@@ -37,6 +36,7 @@ export default function App() {
   const [gameOver, setGameOver] = useState<string | null>(null);
 
   const [aiDifficulty, setAiDifficulty] = useState<number>(4);
+  // FIX 3: hintDifficulty moved to settings
   const [hintDifficulty, setHintDifficulty] = useState<number>(4);
   const [boardTheme, setBoardTheme] = useState<BoardTheme>('classic');
   const [pieceTheme, setPieceTheme] = useState<PieceTheme>('classic');
@@ -47,10 +47,8 @@ export default function App() {
   const [hintMove, setHintMove] = useState<Move | null>(null);
   const [isHinting, setIsHinting] = useState(false);
 
-  // Active repetition violation — null means no current violation
   const [repetitionViolation, setRepetitionViolation] = useState<RepetitionViolation | null>(null);
 
-  // Setup screen state
   const [setupGame, setSetupGame] = useState<Xiangqi | null>(null);
   const [customConfig, setCustomConfig] = useState<CustomGameConfig>({
     redPlayer: 'human',
@@ -84,8 +82,8 @@ export default function App() {
   const [editPiece, setEditPiece] = useState<Piece | 'eraser' | null>(null);
   const [editHistory, setEditHistory] = useState<Xiangqi[]>([]);
   const [editError, setEditError] = useState<string | null>(null);
+  // FIX 1: isBoardFlipped controls the edit board orientation
   const [isBoardFlipped, setIsBoardFlipped] = useState(false);
-  // Snapshot of the board at the moment "开始对局" was pressed (for "继续编辑")
   const [editStartGame, setEditStartGame] = useState<Xiangqi | null>(null);
   const [isCheatModeUnlocked, setIsCheatModeUnlocked] = useState(false);
   const [cheatPassword, setCheatPassword] = useState('');
@@ -98,7 +96,6 @@ export default function App() {
     return false;
   };
 
-  // Check for game-over and repetition violations after every game state change
   useEffect(() => {
     if (mode !== 'edit' && mode !== 'setup') {
       const winner = game.getWinner();
@@ -107,20 +104,17 @@ export default function App() {
         setRepetitionViolation(null);
         return;
       }
-      // Check for perpetual check/chase at 3+ repetitions
       const violation = game.getRepetitionViolation();
       setRepetitionViolation(violation);
     }
   }, [game, mode]);
 
-  // Forbidden moves for the current turn's player (from repetition violation)
   const currentForbiddenMoves: Move[] = (() => {
     if (!repetitionViolation) return [];
     if (repetitionViolation.violator === game.turn) return repetitionViolation.forbiddenMoves;
     return [];
   })();
 
-  // AI move effect — pass forbidden moves so AI doesn't repeat the violation
   useEffect(() => {
     let isCancelled = false;
     const shouldAiMove = (mode === 'ai' || mode === 'custom') && isAiTurn() && !game.isGameOver();
@@ -129,7 +123,6 @@ export default function App() {
       setAiProgress(0);
       setHintMove(null);
 
-      // Forbidden moves for the AI (if it's the violator)
       const aiForbidden = repetitionViolation && repetitionViolation.violator === game.turn
         ? repetitionViolation.forbiddenMoves
         : [];
@@ -212,60 +205,119 @@ export default function App() {
     if (valid) { setGame(newGame); setActiveCheat('none'); }
   };
 
+  // FIX 1 & 2: Edit click handler
+  // The Board component already handles the flip transform for clicks (aR = isFlipped ? 9-r : r)
+  // So we receive logical (board) coordinates directly — no need to re-transform in App
   const handleEditClick = (r: number, c: number) => {
     const newGame = game.clone();
     const clickedPiece = newGame.getPiece(r, c);
 
-    // If no tool selected and clicked on a piece → select that piece for moving
+    // No tool selected: clicking a piece selects it for moving
     if (!editPiece) {
       if (clickedPiece) setEditPiece(clickedPiece);
       return;
     }
 
-    // If a non-eraser piece is selected and user clicks the same-color piece → select new piece instead
-    if (editPiece !== 'eraser' && clickedPiece && clickedPiece.color === (editPiece as Piece).color) {
+    // Eraser mode
+    if (editPiece === 'eraser') {
+      if (clickedPiece && clickedPiece.type === 'k') { setEditError('将帅不能被删除！'); return; }
+      newGame.setPiece(r, c, null);
+      setEditHistory(prev => [...prev, game]);
+      setGame(newGame);
+      return;
+    }
+
+    // FIX 2: Piece placement — allow replacing ANY piece (same-color or different)
+    // Previously, clicking a same-color piece would just select it; now we allow placement
+    // Exception: if the user has NO piece selected from palette (editPiece came from board click),
+    // clicking a same-color piece should re-select it for moving.
+    // We distinguish palette pieces from board-picked pieces by checking if the piece exists on board.
+    const editPieceObj = editPiece as Piece;
+    const isFromPalette = !['k_red','k_black','a_red','a_black','e_red','e_black',
+      'h_red','h_black','r_red','r_black','c_red','c_black','p_red','p_black'].includes(editPieceObj.id)
+      ? false : true;
+    
+    // Check if editPiece is currently on the board
+    let editPieceOnBoard = false;
+    for (let br = 0; br < 10 && !editPieceOnBoard; br++) {
+      for (let bc = 0; bc < 9 && !editPieceOnBoard; bc++) {
+        const p = newGame.getPiece(br, bc);
+        if (p && p.id === editPieceObj.id) editPieceOnBoard = true;
+      }
+    }
+
+    // If clicking the same square the piece is on, do nothing
+    if (clickedPiece && clickedPiece.id === editPieceObj.id) {
+      setEditPiece(null);
+      return;
+    }
+
+    // If the piece being placed is from the board (not palette) and we click another same-color piece,
+    // re-select that piece instead of placing (so users can chain moves)
+    if (editPieceOnBoard && clickedPiece && clickedPiece.color === editPieceObj.color && clickedPiece.id !== editPieceObj.id) {
       setEditPiece(clickedPiece);
       return;
     }
 
-    if (editPiece === 'eraser') {
-      if (clickedPiece && clickedPiece.type === 'k') { setEditError('将帅不能被删除！'); return; }
-      newGame.setPiece(r, c, null);
-    } else {
-      const isRed = editPiece.color === 'red';
-      let valid = true;
-      switch (editPiece.type) {
-        case 'k': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5) : (r>=0&&r<=2&&c>=3&&c<=5); break;
-        case 'a': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5&&(r+c)%2===0) : (r>=0&&r<=2&&c>=3&&c<=5&&(r+c)%2!==0); break;
-        case 'e': valid = isRed ? (r>=5&&r<=9&&[0,2,4,6,8].includes(c)&&(r+c)%2!==0) : (r>=0&&r<=4&&[0,2,4,6,8].includes(c)&&(r+c)%2===0); break;
-        case 'p': valid = isRed ? (r<=6&&(r<=4||[0,2,4,6,8].includes(c))) : (r>=3&&(r>=5||[0,2,4,6,8].includes(c))); break;
-      }
-      if (!valid) { setEditError('该棋子不能放置在此位置！'); return; }
-      if (clickedPiece && clickedPiece.type==='k' && clickedPiece.color!==editPiece.color) { setEditError('不能覆盖对方的将帅！'); return; }
-      if (clickedPiece && clickedPiece.type==='k' && editPiece.type!=='k') { setEditError('将帅不能被覆盖！'); return; }
-      if (editPiece.type !== 'k') {
-        let count = 0;
-        for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type===editPiece.type&&p.color===editPiece.color) count++; }
-        if (!clickedPiece||clickedPiece.type!==editPiece.type||clickedPiece.color!==editPiece.color) {
-          if (count >= (editPiece.type==='p'?5:2)) { setEditError('不能添加超过正常数量的棋子！'); return; }
-        }
-      }
-      // If dragging an existing piece (same piece selected by clicking it), remove from old pos first
-      const isSamePiece = clickedPiece && clickedPiece.id === (editPiece as Piece).id;
-      if (!isSamePiece) {
-        // Remove the source piece if it came from the board (has a board position)
-        for (let i=0;i<10;i++) for (let j=0;j<9;j++) {
-          const p=newGame.getPiece(i,j);
-          if(p && p.id===(editPiece as Piece).id) newGame.setPiece(i,j,null);
-        }
-      }
-      if (editPiece.type === 'k') {
-        for (let i=0;i<10;i++) for (let j=0;j<9;j++) { const p=newGame.getPiece(i,j); if(p&&p.type==='k'&&p.color===editPiece.color) newGame.setPiece(i,j,null); }
-      }
-      newGame.setPiece(r, c, { ...editPiece, id:`${editPiece.type}_${editPiece.color}_${Date.now()}_${Math.random()}` });
-      // After placing, deselect if it was a board piece being moved
-      setEditPiece(null);
+    // Validate placement position
+    const isRed = editPieceObj.color === 'red';
+    let valid = true;
+    switch (editPieceObj.type) {
+      case 'k': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5) : (r>=0&&r<=2&&c>=3&&c<=5); break;
+      case 'a': valid = isRed ? (r>=7&&r<=9&&c>=3&&c<=5&&(r+c)%2===0) : (r>=0&&r<=2&&c>=3&&c<=5&&(r+c)%2!==0); break;
+      case 'e': valid = isRed ? (r>=5&&r<=9&&[0,2,4,6,8].includes(c)&&(r+c)%2!==0) : (r>=0&&r<=4&&[0,2,4,6,8].includes(c)&&(r+c)%2===0); break;
+      case 'p': valid = isRed ? (r<=6&&(r<=4||[0,2,4,6,8].includes(c))) : (r>=3&&(r>=5||[0,2,4,6,8].includes(c))); break;
     }
+    if (!valid) { setEditError('该棋子不能放置在此位置！'); return; }
+
+    // Don't allow overwriting opponent's king
+    if (clickedPiece && clickedPiece.type==='k' && clickedPiece.color!==editPieceObj.color) {
+      setEditError('不能覆盖对方的将帅！'); return;
+    }
+    // Don't allow overwriting own king with a non-king piece
+    if (clickedPiece && clickedPiece.type==='k' && editPieceObj.type!=='k') {
+      setEditError('将帅不能被覆盖！'); return;
+    }
+
+    // Check piece count limits
+    if (editPieceObj.type !== 'k') {
+      let count = 0;
+      for (let i=0;i<10;i++) for (let j=0;j<9;j++) {
+        const p=newGame.getPiece(i,j);
+        if(p&&p.type===editPieceObj.type&&p.color===editPieceObj.color) count++;
+      }
+      // If placing a NEW piece (not moving existing), check count
+      const isMovingExisting = editPieceOnBoard;
+      if (!isMovingExisting) {
+        if (count >= (editPieceObj.type==='p'?5:2)) { setEditError('不能添加超过正常数量的棋子！'); return; }
+      }
+    }
+
+    // Remove the piece from its current board position (if it came from the board)
+    if (editPieceOnBoard) {
+      for (let i=0;i<10;i++) for (let j=0;j<9;j++) {
+        const p=newGame.getPiece(i,j);
+        if(p && p.id===editPieceObj.id) newGame.setPiece(i,j,null);
+      }
+    }
+
+    // If placing a king, remove the old king of the same color
+    if (editPieceObj.type === 'k') {
+      for (let i=0;i<10;i++) for (let j=0;j<9;j++) {
+        const p=newGame.getPiece(i,j);
+        if(p&&p.type==='k'&&p.color===editPieceObj.color) newGame.setPiece(i,j,null);
+      }
+    }
+
+    // Place the piece
+    const newId = editPieceOnBoard
+      ? editPieceObj.id  // keep same id when moving
+      : `${editPieceObj.type}_${editPieceObj.color}_${Date.now()}_${Math.random()}`;
+    newGame.setPiece(r, c, { ...editPieceObj, id: newId });
+
+    // After placing a board piece, deselect
+    if (editPieceOnBoard) setEditPiece(null);
+
     setEditHistory(prev => [...prev, game]);
     setGame(newGame);
   };
@@ -333,6 +385,7 @@ export default function App() {
   const startEdit = () => {
     resetWorkers();
     setMode('edit'); setPlayerColor('both');
+    setIsBoardFlipped(false);
     const g = new Xiangqi(); g.clearBoard();
     g.setPiece(9,4,{id:'k_red',type:'k',color:'red'});
     g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});
@@ -373,7 +426,6 @@ export default function App() {
   const isEditMode = mode === 'edit';
   const SERIF: React.CSSProperties = { fontFamily: "'Noto Serif SC', 'STKaiti', 'KaiTi', serif" };
 
-  // Violation banner text
   const violationBanner = (() => {
     if (!repetitionViolation) return null;
     const who = repetitionViolation.violator === 'red' ? '红方' : '黑方';
@@ -428,7 +480,7 @@ export default function App() {
             ))}
           </div>
         </div>
-        {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
+        {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,hintDifficulty,setHintDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
       </div>
     );
   }
@@ -599,7 +651,7 @@ export default function App() {
             boardTheme={boardTheme}
             pieceTheme={pieceTheme}
             isEditMode={isEditMode}
-            onEditClick={(r, c) => handleEditClick(isBoardFlipped ? 9-r : r, isBoardFlipped ? 8-c : c)}
+            onEditClick={handleEditClick}
             onSquareClickOverride={activeCheat!=='none'?handleCheatAction:undefined}
             hintMove={hintMove}
             forbiddenMoves={currentForbiddenMoves}
@@ -656,9 +708,10 @@ export default function App() {
       <div className="bg-white border-t border-amber-200 shadow-sm shrink-0">
         <div className="flex items-stretch gap-2 px-3 py-2.5">
 
+          {/* FIX 1: Flip button now same color as Edit button (blue) */}
           {isEditMode ? (
-            <button onClick={()=>setIsBoardFlipped(f=>!f)}
-              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-purple-100 hover:bg-purple-200 border border-purple-300 text-purple-700 rounded-xl text-sm font-medium active:scale-95 transition-all">
+            <button onClick={()=>{ setIsBoardFlipped(f=>!f); setEditPiece(null); }}
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 border border-blue-600 text-white rounded-xl text-sm font-medium active:scale-95 transition-all">
               <RefreshCw className="w-4 h-4" />
               翻转
             </button>
@@ -714,17 +767,18 @@ export default function App() {
                 setEditPiece={setEditPiece}
                 onUndo={handleUndo}
                 undoDisabled={editHistory.length===0}
-                onReset={()=>{ setEditHistory(p=>[...p,game]); setGame(new Xiangqi()); }}
+                onReset={()=>{ setEditHistory(p=>[...p,game]); setGame(new Xiangqi()); setEditPiece(null); }}
                 onClear={()=>{
-                  const g = game.clone();
                   setEditHistory(p=>[...p,game]);
-                  g.clearBoard();
+                  const g = new Xiangqi(); g.clearBoard();
                   g.setPiece(9,4,{id:'k_red',type:'k',color:'red'});
                   g.setPiece(0,4,{id:'k_black',type:'k',color:'black'});
                   setGame(g);
+                  setEditPiece(null);
                 }}
               />
             ) : (
+              /* FIX 3: No hint strength in CheatDrawer */
               <CheatDrawer
                 game={game}
                 playerColor={mode==='custom' ? game.turn as 'red'|'black' : playerColor as 'red'|'black'}
@@ -736,15 +790,13 @@ export default function App() {
                 revivePiece={revivePiece}
                 setRevivePiece={setRevivePiece}
                 onUnlock={handleCheatUnlock}
-                hintDifficulty={hintDifficulty}
-                setHintDifficulty={setHintDifficulty}
               />
             )}
           </div>
         )}
       </div>
 
-      {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
+      {showSettings && <SettingsModal {...{aiDifficulty,setAiDifficulty,hintDifficulty,setHintDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme}} onClose={()=>setShowSettings(false)} />}
 
       {/* EDIT ERROR MODAL */}
       {editError && (
@@ -823,24 +875,11 @@ function EditDrawer({ editPiece, setEditPiece, onReset, onClear, onUndo, undoDis
   );
 }
 
-// ── CheatDrawer ───────────────────────────────────────────────────
+// ── CheatDrawer — FIX 3: removed hint strength ────────────────────
 function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, setCheatPassword,
-  activeCheat, setActiveCheat, revivePiece, setRevivePiece, onUnlock, hintDifficulty, setHintDifficulty }: any) {
+  activeCheat, setActiveCheat, revivePiece, setRevivePiece, onUnlock }: any) {
   return (
     <div className="space-y-3">
-      <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Lightbulb className="w-4 h-4 text-yellow-600"/>
-            <span className="text-sm font-bold text-yellow-700">提示强度</span>
-          </div>
-          <select value={hintDifficulty} onChange={(e:any)=>setHintDifficulty(Number(e.target.value))}
-            className="bg-white border border-yellow-300 text-yellow-800 rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none">
-            {[1,2,3,4,5].map(v=><option key={v} value={v}>{['普通','村冠','镇冠','县冠','大师'][v-1]}</option>)}
-          </select>
-        </div>
-        <div className="text-xs text-yellow-600 mt-1.5">强度越高分析越准，耗时越长</div>
-      </div>
       {!isCheatModeUnlocked ? (
         <form onSubmit={onUnlock} className="flex gap-2">
           <input type="password" value={cheatPassword} onChange={(e:any)=>setCheatPassword(e.target.value)}
@@ -885,14 +924,15 @@ function CheatDrawer({ game, playerColor, isCheatModeUnlocked, cheatPassword, se
   );
 }
 
-// ── SettingsModal ─────────────────────────────────────────────────
+// ── SettingsModal — FIX 3: added hint strength setting ───────────
 interface SettingsModalProps {
   aiDifficulty:number; setAiDifficulty:(v:number)=>void;
+  hintDifficulty:number; setHintDifficulty:(v:number)=>void;
   boardTheme:BoardTheme; setBoardTheme:(v:BoardTheme)=>void;
   pieceTheme:PieceTheme; setPieceTheme:(v:PieceTheme)=>void;
   onClose:()=>void;
 }
-function SettingsModal({aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme,onClose}:SettingsModalProps) {
+function SettingsModal({aiDifficulty,setAiDifficulty,hintDifficulty,setHintDifficulty,boardTheme,setBoardTheme,pieceTheme,setPieceTheme,onClose}:SettingsModalProps) {
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-end sm:items-center justify-center z-50"
       style={{ fontFamily:"'Noto Serif SC','STKaiti',serif" }}>
@@ -906,6 +946,8 @@ function SettingsModal({aiDifficulty,setAiDifficulty,boardTheme,setBoardTheme,pi
         <div className="px-5 py-4 space-y-4">
           {[
             { label:'人机难度', value:aiDifficulty, onChange:(v:string)=>setAiDifficulty(Number(v)),
+              opts:[['1','普通'],['2','村冠'],['3','镇冠'],['4','县冠'],['5','大师']] },
+            { label:'提示强度', value:hintDifficulty, onChange:(v:string)=>setHintDifficulty(Number(v)),
               opts:[['1','普通'],['2','村冠'],['3','镇冠'],['4','县冠'],['5','大师']] },
             { label:'棋盘样式', value:boardTheme, onChange:(v:string)=>setBoardTheme(v as BoardTheme),
               opts:[['classic','经典'],['wood','木纹'],['paper','纸质']] },

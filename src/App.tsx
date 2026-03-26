@@ -711,7 +711,7 @@ export default function App() {
           {/* FIX 1: Flip button now same color as Edit button (blue) */}
           {isEditMode ? (
             <button onClick={()=>{ setIsBoardFlipped(f=>!f); setEditPiece(null); }}
-              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-blue-600 hover:bg-blue-700 border border-blue-600 text-white rounded-xl text-sm font-medium active:scale-95 transition-all">
+              className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium active:scale-95 transition-all">
               <RefreshCw className="w-4 h-4" />
               翻转
             </button>

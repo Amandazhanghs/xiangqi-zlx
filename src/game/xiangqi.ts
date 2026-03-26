@@ -15,16 +15,14 @@ export interface Move {
   captured?: Piece;
 }
 
-// ─── Draw / Violation Result ────────────────────────────────────────
 export type DrawReason = 'repetition5' | 'moves120' | 'noOffensivePieces';
 
 export interface RepetitionViolation {
-  violator: PieceColor;   // who must change their move
+  violator: PieceColor;
   reason: 'perpetualCheck' | 'perpetualChase';
-  forbiddenMoves: Move[]; // moves the violator must NOT make (the repeating moves)
+  forbiddenMoves: Move[];
 }
 
-// ─── Board position hash ─────────────────────────────────────────────
 function boardKey(board: (Piece | null)[][], turn: PieceColor): string {
   let s = turn === 'red' ? 'R' : 'B';
   for (let r = 0; r < 10; r++) {
@@ -45,12 +43,8 @@ export class Xiangqi {
   turn: PieceColor;
   history: Move[];
   capturedPieces: Piece[];
-
-  // Draw tracking
-  positionHistory: Map<string, number>; // position key -> occurrence count
-  movesSinceCapture: number;            // half-moves since last capture
-
-  // Board keys parallel to history (key BEFORE each move was made)
+  positionHistory: Map<string, number>;
+  movesSinceCapture: number;
   boardKeyHistory: string[];
 
   constructor() {
@@ -62,7 +56,6 @@ export class Xiangqi {
     this.movesSinceCapture = 0;
     this.boardKeyHistory = [];
     this.initBoard();
-    // Record initial position
     this._recordPosition();
   }
 
@@ -71,9 +64,7 @@ export class Xiangqi {
     for (let r = 0; r < 10; r++) {
       for (let c = 0; c < 9; c++) {
         const p = this.board[r][c];
-        if (p && p.color === color && offensiveTypes.includes(p.type)) {
-          return true;
-        }
+        if (p && p.color === color && offensiveTypes.includes(p.type)) return true;
       }
     }
     return false;
@@ -330,7 +321,7 @@ export class Xiangqi {
     return false;
   }
 
-  // ── Detect which opponent pieces a given move directly threatens (attacks) ──
+  // Returns set of opponent piece IDs that `color` is currently attacking
   getAttackedPieceIds(color: PieceColor): Set<string> {
     const oppColor = color === 'red' ? 'black' : 'red';
     const attacked = new Set<string>();
@@ -430,15 +421,18 @@ export class Xiangqi {
   // ─────────────────────────────────────────────────────────────────
   // PERPETUAL CHECK / CHASE DETECTION
   //
-  // Fires at 3 occurrences of the same position (before the 5-repetition draw).
-  // Returns the violator color and which moves are forbidden.
+  // Completely rewritten for correctness:
+  // - Detects when the same position has occurred 3+ times
+  // - Replays the last repeating cycle to classify each move
+  // - Returns forbidden moves for the violating side
   // ─────────────────────────────────────────────────────────────────
   getRepetitionViolation(): RepetitionViolation | null {
-    const currentKey = boardKey(this.board, this.turn);
-    // Need at least 3 occurrences of this position
-    if ((this.positionHistory.get(currentKey) ?? 0) < 3) return null;
+    const hLen = this.history.length;
+    // Need at least 4 moves for one cycle (2 per side)
+    if (hLen < 4) return null;
 
-    // Try period 2 and period 4
+    // Check for cycles of period 2 (most common: A-B-A-B pattern)
+    // and period 4 (A-B-C-D-A-B-C-D pattern)
     for (const period of [2, 4]) {
       const result = this._checkPerpetualForPeriod(period);
       if (result) return result;
@@ -448,62 +442,86 @@ export class Xiangqi {
 
   private _checkPerpetualForPeriod(period: number): RepetitionViolation | null {
     const hLen = this.history.length;
-    // Need at least 2*period moves to have two full cycles
+    // Need at least 2 full cycles
     if (hLen < period * 2) return null;
 
+    // Verify the last `period` moves are identical to the `period` moves before that
+    // by comparing board positions at matching points
+    // Position at index i in boardKeyHistory = board state BEFORE history[i]
+    // Current board state = after history[hLen-1]
+
+    // We need: current pos == pos at hLen-period (i.e., boardKeyHistory[hLen-period] wait...)
+    // boardKeyHistory[i] = key BEFORE history[i] was made
+    // So after history[hLen-1]: current position
+    // After history[hLen-1-period]: boardKeyHistory[hLen-period] (key before move hLen-period)
+    //   = position after move hLen-period-1
+
+    // Let's denote positions as P[i] = position AFTER history[i-1] (P[0] = initial)
+    // P[hLen] = current position
+    // boardKeyHistory[i] = P[i] (key before move i = position after move i-1)
+    // So P[hLen] = current position
+    //    P[hLen - period] = boardKeyHistory[hLen - period]
+
+    // For a cycle of period `period`, we need:
+    // P[hLen] == P[hLen - period] == P[hLen - 2*period]
+
+    // P[hLen] (current) - we compute directly
     const currentKey = boardKey(this.board, this.turn);
-
-    // Position period moves ago = boardKeyHistory[hLen - period]
-    // (that entry is the key BEFORE move index hLen-period, which equals
-    //  the position AFTER move index hLen-period-1 = position period moves ago)
+    
+    // P[hLen - period]: this is the position after move (hLen-period-1)
+    // = boardKeyHistory[hLen - period] (key BEFORE move hLen-period = position AFTER move hLen-period-1)
     if (hLen - period < 0 || hLen - 2 * period < 0) return null;
+    
+    const keyAtPeriod = this.boardKeyHistory[hLen - period];
+    const keyAt2Period = this.boardKeyHistory[hLen - 2 * period];
 
-    const keyPeriodBack = this.boardKeyHistory[hLen - period];
-    const key2PeriodBack = this.boardKeyHistory[hLen - 2 * period];
+    if (!keyAtPeriod || !keyAt2Period) return null;
+    if (currentKey !== keyAtPeriod || currentKey !== keyAt2Period) return null;
 
-    if (!keyPeriodBack || !key2PeriodBack) return null;
-    // All three positions (current, -period, -2*period) must be identical
-    if (currentKey !== keyPeriodBack || currentKey !== key2PeriodBack) return null;
-
-    // We have a repeating cycle of length `period`.
-    // Replay the last 2*period moves and analyze each one.
-    const stateAt2PBack = this._reconstructStateAt(hLen - 2 * period);
-    if (!stateAt2PBack) return null;
+    // We have confirmed a repeating cycle of length `period`.
+    // Now replay the last 2*period moves to classify each move.
+    // Start from position at hLen - 2*period
+    const startIdx = hLen - 2 * period;
+    const startState = this._reconstructStateAt(startIdx);
+    if (!startState) return null;
 
     type MoveAnalysis = {
       color: PieceColor;
       givesCheck: boolean;
-      chasedPieceIds: Set<string>;
+      chasedPieceIds: Set<string>; // newly threatened opp pieces (non-king)
     };
 
     const analyses: MoveAnalysis[] = [];
-    let state = stateAt2PBack;
+    let state = startState;
 
-    for (let i = hLen - 2 * period; i < hLen; i++) {
+    for (let i = startIdx; i < hLen; i++) {
       const move = this.history[i];
       const movingColor = state.turn;
 
+      // Pieces attacked by movingColor BEFORE the move
       const attackedBefore = state.getAttackedPieceIds(movingColor);
 
+      // Make the move on a clone
       const nextState = state.clone();
       nextState.makeMove(move, true);
 
       const oppColor: PieceColor = movingColor === 'red' ? 'black' : 'red';
       const givesCheck = nextState.isInCheck(oppColor);
 
+      // Pieces attacked by movingColor AFTER the move
       const attackedAfter = nextState.getAttackedPieceIds(movingColor);
 
-      // Newly chased = pieces now attacked that weren't before, excluding kings
+      // Newly chased = attacked after but not before, excluding kings
       const chasedPieceIds = new Set<string>();
       for (const id of attackedAfter) {
         if (!attackedBefore.has(id)) {
-          let found = false;
-          for (let r = 0; r < 10 && !found; r++) {
-            for (let c = 0; c < 9 && !found; c++) {
+          // Verify it's not a king
+          outer: for (let r = 0; r < 10; r++) {
+            for (let c = 0; c < 9; c++) {
               const p = nextState.getPiece(r, c);
-              if (p && p.id === id && p.type !== 'k') {
-                chasedPieceIds.add(id);
-                found = true;
+              if (p && p.id === id) {
+                if (p.type !== 'k') chasedPieceIds.add(id);
+                break outer;
               }
             }
           }
@@ -514,90 +532,80 @@ export class Xiangqi {
       state = nextState;
     }
 
-    const firstMoveColor = analyses[0].color;
-    const secondMoveColor = analyses[1]?.color;
-
-    const movesOfFirst = analyses.filter(a => a.color === firstMoveColor);
-    const movesOfSecond = secondMoveColor ? analyses.filter(a => a.color === secondMoveColor) : [];
-
-    // Helper: build forbidden moves list from the LAST period's moves for a given color
+    // analyses[0..period-1] = first cycle
+    // analyses[period..2*period-1] = second cycle (repeat)
+    // The two alternating players in a cycle of period `period`:
+    const colors = new Set(analyses.map(a => a.color));
+    
+    // Helper to get all analyses for a given color across both cycles
+    const getAnalysesFor = (color: PieceColor) => analyses.filter(a => a.color === color);
+    
+    // Helper to build forbidden moves = moves made by `color` in the LAST cycle
     const buildForbidden = (color: PieceColor): Move[] => {
-      const lastPeriodStart = hLen - period;
       const forbidden: Move[] = [];
-      for (let i = lastPeriodStart; i < hLen; i++) {
-        if (analyses[i - (hLen - 2 * period)].color === color) {
-          forbidden.push(this.history[i]);
+      for (let i = hLen - period; i < hLen; i++) {
+        if (this.history[i] !== undefined) {
+          const analysisIdx = i - startIdx;
+          if (analyses[analysisIdx] && analyses[analysisIdx].color === color) {
+            forbidden.push(this.history[i]);
+          }
         }
       }
       return forbidden;
     };
 
-    // Check perpetual check — first player
-    if (movesOfFirst.length >= 2 && movesOfFirst.every(a => a.givesCheck)) {
-      const forbidden = buildForbidden(firstMoveColor);
-      if (forbidden.length > 0) return { violator: firstMoveColor, reason: 'perpetualCheck', forbiddenMoves: forbidden };
-    }
+    // Check each player for perpetual check or perpetual chase
+    for (const color of colors) {
+      const colorAnalyses = getAnalysesFor(color);
+      if (colorAnalyses.length < 2) continue;
 
-    // Check perpetual chase — first player
-    if (movesOfFirst.length >= 2) {
+      // Perpetual check: ALL moves by this color give check
+      if (colorAnalyses.every(a => a.givesCheck)) {
+        const forbidden = buildForbidden(color);
+        if (forbidden.length > 0) {
+          return { violator: color, reason: 'perpetualCheck', forbiddenMoves: forbidden };
+        }
+      }
+
+      // Perpetual chase: there exists at least one piece that is chased
+      // by ALL moves of this color in the cycle
+      // Intersect all chasedPieceIds sets
       let commonChased: Set<string> | null = null;
-      for (const a of movesOfFirst) {
+      for (const a of colorAnalyses) {
         if (commonChased === null) {
           commonChased = new Set(a.chasedPieceIds);
         } else {
-          for (const id of commonChased) {
+          for (const id of Array.from(commonChased)) {
             if (!a.chasedPieceIds.has(id)) commonChased.delete(id);
           }
         }
       }
       if (commonChased && commonChased.size > 0) {
-        const forbidden = buildForbidden(firstMoveColor);
-        if (forbidden.length > 0) return { violator: firstMoveColor, reason: 'perpetualChase', forbiddenMoves: forbidden };
-      }
-    }
-
-    // Check perpetual check — second player
-    if (movesOfSecond.length >= 2 && movesOfSecond.every(a => a.givesCheck)) {
-      const forbidden = buildForbidden(secondMoveColor!);
-      if (forbidden.length > 0) return { violator: secondMoveColor!, reason: 'perpetualCheck', forbiddenMoves: forbidden };
-    }
-
-    // Check perpetual chase — second player
-    if (movesOfSecond.length >= 2) {
-      let commonChased: Set<string> | null = null;
-      for (const a of movesOfSecond) {
-        if (commonChased === null) {
-          commonChased = new Set(a.chasedPieceIds);
-        } else {
-          for (const id of commonChased) {
-            if (!a.chasedPieceIds.has(id)) commonChased.delete(id);
-          }
+        const forbidden = buildForbidden(color);
+        if (forbidden.length > 0) {
+          return { violator: color, reason: 'perpetualChase', forbiddenMoves: forbidden };
         }
-      }
-      if (commonChased && commonChased.size > 0) {
-        const forbidden = buildForbidden(secondMoveColor!);
-        if (forbidden.length > 0) return { violator: secondMoveColor!, reason: 'perpetualChase', forbiddenMoves: forbidden };
       }
     }
 
     return null;
   }
 
+  // Reconstruct game state after `targetIndex` moves from start
   private _reconstructStateAt(targetIndex: number): Xiangqi | null {
     if (targetIndex < 0 || targetIndex > this.history.length) return null;
-    const fresh = new Xiangqi();
-    return fresh._replayMoves(this.history.slice(0, targetIndex));
-  }
-
-  private _replayMoves(moves: Move[]): Xiangqi {
     const g = new Xiangqi();
-    for (const m of moves) {
-      g.makeMove(m);
+    for (let i = 0; i < targetIndex; i++) {
+      const m = this.history[i];
+      if (!g.makeMove(m)) {
+        // Move failed - try with ignoreTurn
+        g.makeMove(m, true);
+        g.turn = g.turn === 'red' ? 'black' : 'red';
+      }
     }
     return g;
   }
 
-  // ── Winner / Draw ────────────────────────────────────────────────
   getWinner(): PieceColor | 'draw' | null {
     let redKing = false, blackKing = false;
     for (let r = 0; r < 10; r++) {
@@ -615,11 +623,6 @@ export class Xiangqi {
 
     if (!this._hasOffensivePieces('red') && !this._hasOffensivePieces('black')) return 'draw';
     if (this.isDrawBy120()) return 'draw';
-
-    // NOTE: isDrawByRepetition5 is intentionally NOT checked here.
-    // Repetition is handled via getRepetitionViolation() at 3 occurrences.
-    // The 5-repetition draw is only a last-resort fallback — if we reach 5
-    // repetitions without a violation being detected, declare draw.
     if (this.isDrawByRepetition5()) return 'draw';
 
     if (this.getAllValidMoves(this.turn).length === 0) {
@@ -677,7 +680,6 @@ export class Xiangqi {
     }
 
     this.boardKeyHistory.pop();
-
     this.turn = this.turn === 'red' ? 'black' : 'red';
 
     this.movesSinceCapture = 0;

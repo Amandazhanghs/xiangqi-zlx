@@ -184,7 +184,7 @@ function detectOpponentStyle(game: Xiangqi, myColor: PieceColor): string {
   }
   if (oppPawnAdvance && !oppCannonCenter) {
     // 对手挺兵 → 中炮或起马快速反制
-    return Math.random() < 0.5 ? '中炮流' : '起马流';
+    return Math.random() < 0.5 ? '进兵流' : '飞相流';
   }
   if (oppElephantCenter) {
     // 对手飞中象守势 → 积极进攻

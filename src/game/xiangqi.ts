@@ -592,18 +592,125 @@ export class Xiangqi {
   }
 
   // Reconstruct game state after `targetIndex` moves from start
+ // 在 Xiangqi 类中修改以下私有方法：
+
+  // 优化：通过克隆当前游戏并回溯 undo 来获取历史状态，
+  // 这样可以完美支持“打谱”后的自定义棋盘。
   private _reconstructStateAt(targetIndex: number): Xiangqi | null {
     if (targetIndex < 0 || targetIndex > this.history.length) return null;
-    const g = new Xiangqi();
-    for (let i = 0; i < targetIndex; i++) {
-      const m = this.history[i];
-      if (!g.makeMove(m)) {
-        // Move failed - try with ignoreTurn
-        g.makeMove(m, true);
-        g.turn = g.turn === 'red' ? 'black' : 'red';
-      }
+    
+    const g = this.clone();
+    // 不断撤销直到达到目标步数
+    while (g.history.length > targetIndex) {
+      if (!g.undo()) break;
     }
     return g;
+  }
+
+  // 优化：确保判定逻辑能正确识别循环
+  private _checkPerpetualForPeriod(period: number): RepetitionViolation | null {
+    const hLen = this.history.length;
+    // 需要至少 2 个完整的循环周期（例如周期2需要4步，周期4需要8步）
+    if (hLen < period * 2) return null;
+
+    const currentKey = boardKey(this.board, this.turn);
+    const keyAtPeriod = this.boardKeyHistory[hLen - period];
+    const keyAt2Period = this.boardKeyHistory[hLen - 2 * period];
+
+    if (!keyAtPeriod || !keyAt2Period) return null;
+    
+    // 只有当当前局面、一个周期前的局面、两个周期前的局面完全一致时，触发检测
+    if (currentKey !== keyAtPeriod || currentKey !== keyAt2Period) return null;
+
+    // 从两个周期前的位置开始分析
+    const startIdx = hLen - 2 * period;
+    let state = this._reconstructStateAt(startIdx);
+    if (!state) return null;
+
+    type MoveAnalysis = {
+      color: PieceColor;
+      givesCheck: boolean;
+      chasedPieceIds: Set<string>;
+    };
+
+    const analyses: MoveAnalysis[] = [];
+
+    // 重演最近两个周期的所有着法
+    for (let i = startIdx; i < hLen; i++) {
+      const move = this.history[i];
+      const movingColor = state.turn;
+
+      // 记录动子前被攻击的棋子
+      const attackedBefore = state.getAttackedPieceIds(movingColor);
+
+      const nextState = state.clone();
+      if (!nextState.makeMove(move)) break;
+
+      const oppColor: PieceColor = movingColor === 'red' ? 'black' : 'red';
+      const givesCheck = nextState.isInCheck(oppColor);
+
+      // 记录动子后新增加的攻击目标（排除将帅）
+      const attackedAfter = nextState.getAttackedPieceIds(movingColor);
+      const chasedPieceIds = new Set<string>();
+      for (const id of attackedAfter) {
+        if (!attackedBefore.has(id)) {
+          // 检查是否为非王棋子
+          let isKing = false;
+          outer: for (let r = 0; r < 10; r++) {
+            for (let c = 0; c < 9; c++) {
+              const p = nextState.getPiece(r, c);
+              if (p && p.id === id && p.type === 'k') { isKing = true; break outer; }
+            }
+          }
+          if (!isKing) chasedPieceIds.add(id);
+        }
+      }
+
+      analyses.push({ color: movingColor, givesCheck, chasedPieceIds });
+      state = nextState;
+    }
+
+    const colors: PieceColor[] = ['red', 'black'];
+    
+    for (const color of colors) {
+      const colorAnalyses = analyses.filter(a => a.color === color);
+      if (colorAnalyses.length < 2) continue;
+
+      // 判定 1: 长将 (该玩家在循环中所有着法均为将军)
+      if (colorAnalyses.every(a => a.givesCheck)) {
+        return { 
+          violator: color, 
+          reason: 'perpetualCheck', 
+          forbiddenMoves: this.history.slice(hLen - period).filter((_, i) => {
+             const idx = (hLen - period + i) - startIdx;
+             return analyses[idx].color === color;
+          })
+        };
+      }
+
+      // 判定 2: 长捉 (该玩家在循环中所有着法都在持续威胁同一个或多个棋子)
+      let commonChased: Set<string> | null = null;
+      for (const a of colorAnalyses) {
+        if (commonChased === null) commonChased = new Set(a.chasedPieceIds);
+        else {
+          for (const id of Array.from(commonChased)) {
+            if (!a.chasedPieceIds.has(id)) commonChased.delete(id);
+          }
+        }
+      }
+
+      if (commonChased && commonChased.size > 0) {
+        return { 
+          violator: color, 
+          reason: 'perpetualChase', 
+          forbiddenMoves: this.history.slice(hLen - period).filter((_, i) => {
+             const idx = (hLen - period + i) - startIdx;
+             return analyses[idx].color === color;
+          })
+        };
+      }
+    }
+    return null;
   }
 
   getWinner(): PieceColor | 'draw' | null {
